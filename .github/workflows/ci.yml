@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  # 合并到 main 不再自动跑（单人开发，本机 `npm run check` 同款检查已覆盖），
+  # 只保留 PR 校验与手动触发：Actions 页选 CI → Run workflow。
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-22.04, windows-latest]
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装 Linux 系统依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libdbus-1-dev pkg-config \
+            build-essential \
+            curl wget file \
+            libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      # 下限由 Cargo.toml 的 rust-version 决定（当前 1.90，来自 tauri / muda），
+      # 不写死在这里：上游抬 MSRV 时只改 Cargo.toml 一处，否则 CI 会悄悄掩盖问题。
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: 校验 Cargo.toml 的 MSRV 不高于本机工具链
+        shell: bash
+        run: |
+          set -euo pipefail
+          msrv=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' src-tauri/Cargo.toml)
+          # 直接问 rustc：dtolnay/rust-toolchain 只暴露 cachekey / name 两个输出，
+          # 没有 rustc-version（早先这里引用了不存在的输出，导致三平台全部失败）
+          actual=$(rustc --version | awk '{print $2}')
+          echo "Cargo.toml rust-version = $msrv / 实际工具链 = $actual"
+          [ -n "$msrv" ] || { echo "Cargo.toml 缺少 rust-version"; exit 1; }
+          # 依赖树抬 MSRV 后忘了同步 Cargo.toml，会在这里暴露
+          lowest=$(printf '%s\n%s\n' "$msrv" "${actual%%-*}" | sort -V | head -1)
+          test "$lowest" = "$msrv"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      - name: 前端单测 + 类型 + 构建
+        run: |
+          npm run test
+          npm run typecheck
+          npm run build:web
+
+      - name: Rust 格式 / lint / 单测
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          # --no-capture：Windows 上测试进程异常退出时默认输出会被吞掉，
+          # 没有 --no-capture 只会看到 "test exited abnormally"，看不到是哪个用例挂了
+          cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
+
+      - name: Tauri 编译（不打包，验证三平台宿主代码）
+        run: npm run tauri -- build --no-bundle

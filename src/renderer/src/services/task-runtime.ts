@@ -1,0 +1,254 @@
+import type { TaskSnapshot } from '@preload/ipc-contract'
+import type { TaskPayload } from '@renderer/services/task-payload'
+import { debugLog } from '@renderer/utils/debug'
+
+/**
+ * 任务通道适配器：收敛下载/录制两组 IPC API 的差异
+ */
+export interface TaskChannelAdapter {
+  start: (_url: string, _filename: string, _liveId: string) => Promise<any>
+  progress: (_callback: (_liveId: string, _time: string) => void) => () => void
+  end: (_callback: (_liveId: string, _filePath: string) => void) => () => void
+  error: (_callback: (_liveId: string, _error: any) => void) => () => void
+  stop: (_liveId: string) => void
+}
+
+/**
+ * 任务状态。
+ * - starting：启动请求已发出、尚未确认（startTask 的多次 IPC 往返都在此期间）
+ * - running：主进程 ffmpeg 正在跑
+ * - finished：已完成 / 被停止 / 出错（三者都终止任务，故共用一个状态）
+ *
+ * starting 与 running 必须分开：只有 starting 可以再次发起（见 stores/tasks 的 handleTask），
+ * 否则这段拉起窗口内的重复点击会启动第二个写同一文件的 ffmpeg。
+ */
+export type TaskStatus = 'starting' | 'running' | 'finished'
+
+/**
+ * 一个下载/录制任务的完整状态：**普通对象，没有任何方法**。
+ *
+ * 它的变化（status / filePath）之所以能驱动视图，靠的是它被放进 store 的
+ * ref 列表后由 Vue 建立依赖追踪——不需要 class 的 getter/setter，也不需要
+ * 手动 reactive() 加类型断言那套技巧。
+ */
+export interface TaskState {
+  /** 唯一键：直播 / 回放的 liveId */
+  liveId: string
+  /** 源地址：下载为 HLS，录制为 RTMP */
+  url: string
+  /** 文件名（不含目录） */
+  filename: string
+  /** 落盘绝对路径：start 时算出、end 时由主进程回填；未就绪时为空串 */
+  filePath: string
+  /** 保存目录：启动时从配置读取，供「打开文件夹」使用 */
+  saveDirectory: string
+  status: TaskStatus
+  /**
+   * ffmpeg 心跳上报的已处理时长（`time=xx:xx:xx.xx` 原样）。
+   * 仅运行中有值，任务结束即清空。
+   * 不落盘，故页面刷新后需等下一个心跳才恢复；Progress 事件跨窗广播，
+   * 播放窗发起的录制，主窗口的镜像卡片同样能显示。
+   */
+  elapsed?: string
+  /** 已注册的 IPC 监听器取消函数（基础设施字段，不是业务数据）：任务终止时清空，避免泄漏 */
+  unsubscribers: Array<() => void>
+}
+
+/** 任务正常完成的回调：由 store 注入用于弹提示（本模块不直接碰 UI） */
+export type TaskEndListener = (_task: TaskState) => void
+
+/** 纯工厂：只组装初始数据，不产生任何副作用 */
+export function createTaskState(payload: TaskPayload): TaskState {
+  return {
+    liveId: payload.liveId,
+    url: payload.url,
+    filename: payload.filename,
+    filePath: '',
+    saveDirectory: '',
+    status: 'starting',
+    unsubscribers: [],
+  }
+}
+
+/** 移除该任务已注册的全部 IPC 监听器（幂等） */
+function cleanupListeners(task: TaskState) {
+  for (const unsubscribe of task.unsubscribers)
+    unsubscribe()
+  task.unsubscribers.length = 0
+}
+
+/**
+ * 「任务已登记」快照并入本地镜像的处置：
+ * - skip：本窗口已在跟踪该任务
+ * - resync：有卡片但没在跟踪（监听器已清空）→ 按快照重新对齐，existing 为对应列表项
+ * - mirror：本窗口没有该任务（在别的窗口发起）→ 新建镜像卡片
+ */
+export type TaskMergeDecision
+  = | { action: 'skip' | 'mirror' }
+    | { action: 'resync', existing: TaskState }
+
+/**
+ * 判断主进程广播的「任务已登记」快照该如何并入本地列表（纯函数，便于单测）。
+ * `unsubscribers.length === 0` 表示本窗口没在跟踪它：前提是 startTask / restoreTask
+ * 都会在 running 时注册监听器，end / error / stop 会清空它们，改动时需同步复核。
+ */
+export function decideTaskMerge(list: readonly TaskState[], snapshot: TaskSnapshot): TaskMergeDecision {
+  const existing = list.find(item => item.liveId === snapshot.liveId)
+  if (!existing)
+    return { action: 'mirror' }
+  if (snapshot.status === 'running' && existing.unsubscribers.length === 0)
+    return { action: 'resync', existing }
+  return { action: 'skip' }
+}
+
+/**
+ * 注册进度（ffmpeg 心跳）监听器；start 与 restore 共用。
+ *
+ * 事件带 liveId：同一窗口可能同时镜像多个任务（下载页分区展示录制与回放下载），
+ * 只接受属于本任务的那条心跳。
+ */
+function subscribeProgress(
+  task: TaskState,
+  channels: TaskChannelAdapter,
+  logTag: string,
+) {
+  task.unsubscribers.push(channels.progress((liveId: string, time: string) => {
+    if (liveId !== task.liveId)
+      return
+    // 心跳直接写回 task 字段：TaskState 是 reactive 对象，赋值即触发视图更新
+    task.elapsed = time
+    // progress 每个 ffmpeg 心跳都触发，用 debug 门控避免生产环境控制台被刷屏
+    debugLog('tasks', `[${logTag}] task progress:`, liveId, time)
+  }))
+}
+
+/**
+ * 注册任务结束（end / error）监听器；start 与 restore 共用。
+ * 两者都把任务置为 finished，差别只在 error 额外打日志、且不触发完成提示。
+ */
+function subscribeEndEvents(
+  task: TaskState,
+  channels: TaskChannelAdapter,
+  logTag: string,
+  onEnd?: TaskEndListener,
+) {
+  task.unsubscribers.push(channels.end((liveId: string, filePath: string) => {
+    if (liveId !== task.liveId)
+      return
+    task.filePath = filePath
+    task.status = 'finished'
+    task.elapsed = undefined
+    cleanupListeners(task)
+    onEnd?.(task)
+    debugLog('tasks', `[${logTag}] task end:`, liveId)
+  }))
+  task.unsubscribers.push(channels.error((liveId: string, error: any) => {
+    if (liveId !== task.liveId)
+      return
+    console.error(`[${logTag}] task error`, error)
+    task.status = 'finished'
+    task.elapsed = undefined
+    cleanupListeners(task)
+  }))
+}
+
+/**
+ * 启动任务：读保存目录 → 拼落盘路径 → 订阅事件 → 下发 IPC。
+ *
+ * 直接改写 task 上的字段，store 侧看到的就是同一份状态。
+ * 失败时自行清理已注册的监听器后抛出，由调用方决定提示与列表处理。
+ */
+export async function startTask(
+  task: TaskState,
+  channels: TaskChannelAdapter,
+  logTag: string,
+  onEnd?: TaskEndListener,
+): Promise<void> {
+  // 同步置 starting（下方全是异步往返）：这段时间若状态还是「可发起」，
+  // 重复触发会再走一遍启动，拉起两个写同一文件的 ffmpeg
+  task.status = 'starting'
+
+  try {
+    // ★ 跨进程：preload/index.ts → main/ipc/register-database-ipc.ts 的 'getConfig'
+    task.saveDirectory = await window.mainAPI.getConfig('downloadDirectory')
+    if (!task.saveDirectory)
+      throw new Error('保存目录为空')
+
+    // ★ 跨进程：路径拼接交给主进程，避免渲染层猜测平台分隔符（对端 main/ipc/register-system-ipc.ts）
+    task.filePath = await window.mainAPI.pathJoin(task.saveDirectory, task.filename)
+
+    // 先注册监听器，避免 ffmpeg 启动后立即发送的事件丢失
+    subscribeProgress(task, channels, logTag)
+    subscribeEndEvents(task, channels, logTag, onEnd)
+
+    debugLog('tasks', `[${logTag}] task start:`, task.url, task.filename, task.liveId)
+    await channels.start(task.url, task.filename, task.liveId)
+
+    // 启动期间被结束：此时主进程才挂好 stop 监听，补发一次（stopTask 不会提前下发）。
+    // as 是因为 TS 仍按上面那句 'starting' 赋值收窄，而状态在 await 期间可能已被 stopTask 改写
+    if ((task.status as TaskStatus) === 'finished') {
+      channels.stop(task.liveId)
+      return
+    }
+    task.status = 'running'
+  }
+  catch (error) {
+    cleanupListeners(task)
+    // 启动失败也是终态：留在 starting 会让同 liveId 永远无法再次发起
+    task.status = 'finished'
+    console.error(`[${logTag}] task start failed`, error)
+    throw error
+  }
+}
+
+/**
+ * 从主进程快照恢复任务状态。
+ * 渲染端刷新（F5）后原页面与监听器已销毁，主进程 ffmpeg 仍在运行；
+ * 这里根据快照重建状态，若任务仍在运行则重新订阅心跳与结束事件以续接其生命周期。
+ *
+ * 跨窗镜像同样走这里（stores/tasks.ts 的 mergeStartedTask / restoreTasks）：
+ * 录制全部由播放窗发起，主窗口拿到的是镜像，必须订阅心跳才能显示已录制时长。
+ */
+export function restoreTask(
+  task: TaskState,
+  snapshot: TaskSnapshot,
+  channels: TaskChannelAdapter,
+  logTag: string,
+  onEnd?: TaskEndListener,
+): void {
+  task.saveDirectory = snapshot.saveDirectory
+  task.filePath = snapshot.filePath
+  task.status = snapshot.status === 'running' ? 'running' : 'finished'
+  if (task.status === 'running') {
+    subscribeProgress(task, channels, logTag)
+    subscribeEndEvents(task, channels, logTag, onEnd)
+  }
+}
+
+/** 停止任务：已是终态则什么都不做 */
+export function stopTask(task: TaskState, channels: TaskChannelAdapter, logTag: string): void {
+  if (task.status === 'finished')
+    return
+  // 启动中主进程还没挂上 stop 监听，此刻下发会丢；由 startTask 在 start 返回后补发
+  if (task.status === 'running')
+    channels.stop(task.liveId)
+  task.status = 'finished'
+  cleanupListeners(task)
+  debugLog('tasks', `[${logTag}] task stop`)
+}
+
+/**
+ * 在系统文件管理器中打开该任务的保存目录。
+ * 唤起失败（目录已被移动 / 无权限）时回调 onError——本模块不依赖 Vue 与 UI 组件库，提示交给调用方。
+ */
+export function openSaveDirectory(task: TaskState, onError?: (() => void) | undefined): void {
+  if (!task.saveDirectory) {
+    console.error('saveDirectory is not initialized')
+    return
+  }
+  // ★ 跨进程：preload/index.ts → main/ipc/register-system-ipc.ts 的 'openPath'
+  window.mainAPI.openPath(task.saveDirectory).catch((error) => {
+    console.error('[task-runtime] 打开保存目录失败', task.saveDirectory, error)
+    onError?.()
+  })
+}

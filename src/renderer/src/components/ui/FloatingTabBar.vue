@@ -1,0 +1,237 @@
+<script setup lang="ts">
+import { computed, nextTick, ref, watch } from 'vue'
+
+export interface FloatingTabItem {
+  label: string
+  key: string
+  color?: string
+  /** 选项左侧图标（Element Plus 图标组件，可选） */
+  icon?: any
+}
+
+const props = withDefaults(defineProps<{
+  tabs: FloatingTabItem[]
+  active: string
+  /**
+   * 是否脱离文档流自行定位（默认 true = 左上角浮层）。
+   * 置 false 时改为「普通流内的胶囊」，用于与其它浮层并排组成一整条页首工具行。
+   */
+  floating?: boolean
+}>(), {
+  floating: true,
+})
+
+const emit = defineEmits<{ change: [key: string], refresh: [] }>()
+
+/** 激活 tab 的主题渐变：有主题色用之，否则回退品牌渐变 */
+const activeColor = computed(
+  () => props.tabs.find(tab => tab.key === props.active)?.color || '',
+)
+
+function tabStyle(key: string) {
+  if (key !== props.active)
+    return undefined
+  if (!activeColor.value) {
+    return {
+      background: 'var(--gradient-brand)',
+    }
+  }
+  return {
+    background: `linear-gradient(135deg, ${activeColor.value}, ${activeColor.value})`,
+    boxShadow: `0 4px 12px -4px color-mix(in srgb, ${activeColor.value} 80%, transparent)`,
+  }
+}
+
+const barRef = ref<HTMLElement>()
+
+/** 是否横向溢出（未溢出时不介入任何滚动/拖拽行为） */
+function overflowing(el?: HTMLElement): el is HTMLElement {
+  return !!el && el.scrollWidth > el.clientWidth + 1
+}
+
+/** 鼠标滚轮：纵向增量转横向滚动，触控板横扫的 deltaX 同样计入 */
+function onWheel(event: WheelEvent) {
+  const el = barRef.value
+  const delta = event.deltaY + event.deltaX
+  if (!overflowing(el) || !delta)
+    return
+  event.preventDefault()
+  el.scrollLeft += delta
+}
+
+// 按住拖拽滑动；dragged 用于抑制拖拽结束时的误点击
+const dragging = ref(false)
+let dragged = false
+let startX = 0
+let startScroll = 0
+
+function onPointerDown(event: PointerEvent) {
+  const el = barRef.value
+  if (event.button !== 0 || !overflowing(el))
+    return
+  dragging.value = true
+  dragged = false
+  startX = event.clientX
+  startScroll = el.scrollLeft
+  ;(event.target as HTMLElement).setPointerCapture?.(event.pointerId)
+}
+
+function onPointerMove(event: PointerEvent) {
+  const el = barRef.value
+  if (!dragging.value || !el)
+    return
+  const delta = event.clientX - startX
+  if (Math.abs(delta) > 4)
+    dragged = true
+  el.scrollLeft = startScroll - delta
+}
+
+function onPointerUp() {
+  if (!dragging.value)
+    return
+  dragging.value = false
+  // click 跟随 pointerup 同步派发，延迟一拍复位既能照常抑制拖拽尾随的点击，
+  // 也兜住了 pointercancel、落点在空白处等「没有 click 跟进」的场景，避免误吞下一次点击
+  setTimeout(() => {
+    dragged = false
+  })
+}
+
+function change(key: string) {
+  if (dragged)
+    return
+  emit('change', key)
+}
+
+/** 激活项被裁切时自动滚入可视区（含外部改 active 的场景） */
+watch(() => props.active, async () => {
+  await nextTick()
+  barRef.value?.querySelector('.is-active')?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'nearest',
+    inline: 'nearest',
+  })
+}, { immediate: true })
+
+/** 双击当前 tab：通知父组件刷新该 tab 对应的内容 */
+function dblClick(tab: FloatingTabItem) {
+  if (tab.key === props.active)
+    emit('refresh')
+}
+</script>
+
+<template>
+  <div
+    ref="barRef"
+    class="float-tab-bar frosted-surface no-scrollbar"
+    :class="{ 'is-dragging': dragging, 'is-flow': !floating }"
+    @wheel="onWheel"
+    @pointerdown="onPointerDown"
+    @pointermove="onPointerMove"
+    @pointerup="onPointerUp"
+    @pointercancel="onPointerUp"
+  >
+    <button
+      v-for="tab in tabs"
+      :key="tab.key"
+      class="float-tab"
+      :class="{ 'is-active': active === tab.key }"
+      :style="tabStyle(tab.key)"
+      @click="change(tab.key)"
+      @dblclick="dblClick(tab)"
+    >
+      <el-icon v-if="tab.icon" class="tab-icon">
+        <component :is="tab.icon" />
+      </el-icon>
+      {{ tab.label }}
+    </button>
+  </div>
+</template>
+
+<style scoped lang="scss">
+@use '../../assets/css/fluid' as *;
+
+.float-tab-bar {
+  position: absolute;
+  top: var(--float-top);
+  left: 6px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: fluid(3px, 4px);
+  padding: fluid(3px, 4px);
+  border-radius: var(--radius-pill);
+  max-width: 75%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
+
+  /* 并排组成页首工具行时不再自行定位：宽度交给外层 flex 分配，标签多了自己横向滚动 */
+  &.is-flow {
+    position: static;
+    flex: none;
+    max-width: 45%;
+  }
+}
+
+/* 拖拽中：整条变抓手光标，并屏蔽 hover 高亮，避免划过时一路闪烁 */
+.float-tab-bar.is-dragging {
+  cursor: grabbing;
+
+  .float-tab {
+    cursor: grabbing;
+
+    &:hover {
+      background: transparent;
+      box-shadow: none;
+    }
+  }
+}
+
+.float-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: fluid(5px, 6px);
+  flex: none;
+  padding: fluid(7px, 9px) fluid(15px, 24px);
+  border: none;
+  border-radius: var(--radius-pill);
+  font-size: fluid(13px, 15px);
+  font-weight: 500;
+  line-height: 1;
+  color: var(--el-text-color-primary);
+  background: transparent;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease;
+
+  /* 悬浮片：品牌紫淡染 + 同色环。条压在白底上已接近全白、亮度没有余量，
+   * 暗底与亮底只能靠色相取可见度；淡染 20% 是上限，再深会压掉深底上的文字对比 */
+  &:hover {
+    background: rgba(var(--brand-rgb), 0.2);
+    box-shadow:
+      0 0 0 1px rgba(var(--brand-rgb), 0.1),
+      0 0 8px rgba(var(--brand-rgb), 0.2);
+    color: var(--brand-primary-dark);
+  }
+
+  .tab-icon {
+    font-size: inherit;
+  }
+
+  &.is-active {
+    color: #fff;
+    font-weight: 600;
+    /* 激活态背景由内联主题渐变提供，见 tabStyle */
+    box-shadow: var(--shadow-glow);
+  }
+}
+
+/* 条目高度 = 2 * padding-block + 字号（line-height 1），整条 = 条目 + 2 * 内距；
+ * 三者都走 fluid，栏高才是连续值——--tabbar-offset-top 与 --float-top 依赖这个高度，
+ * 单让某一段连续，页首工具行的对齐就会随窗口高漂移 */
+</style>

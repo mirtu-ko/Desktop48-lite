@@ -1,0 +1,13 @@
+# 依赖与构建产物
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# 日志与系统杂项
+*.log
+.DS_Store
+
+# 本地构建的安装包副本
+/bundle/
+*.dmg

@@ -1,0 +1,15 @@
+/* 过渡期组件（MVP LiveDetailPanel / LiveCard）使用的旧变量名。
+ * 新主窗样式走 renderer 的 app.scss（Element Plus 浅色主题），这里只做别名，
+ * 不再覆盖 body / 滚动条等全局规则，避免和 app.scss 的主题打架。 */
+:root {
+  --bg: var(--el-bg-color-page);
+  --surface: var(--el-bg-color);
+  --surface-2: var(--el-bg-color-overlay);
+  --border: var(--el-border-color-lighter);
+  --text: var(--el-text-color-primary);
+  --muted: var(--el-text-color-secondary);
+  --muted-2: var(--el-text-color-placeholder);
+  --accent: var(--brand-primary);
+  --live: var(--color-lives);
+  --warn: var(--el-color-warning);
+}

@@ -1,0 +1,9 @@
+# 渲染层是从上游 Electron 版原样迁入的，逐字节比对（diff / cmp）是日常操作：
+# 明确标记为文本，避免不同平台 checkout 时被换行符改写导致比对永远对不上。
+src/renderer/src/**    text eol=lf
+src/preload/**         text eol=lf
+src/common/**          text eol=lf
+
+*.png  binary
+*.ico  binary
+*.icns binary

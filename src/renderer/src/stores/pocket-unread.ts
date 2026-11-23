@@ -1,0 +1,114 @@
+/**
+ * 房间未读镜像（模块级单例，与 stores/tasks.ts 同一模式）。
+ *
+ * 唯一真相在主进程（main/pocket48/pocket-unread.ts）：主进程 60s 轮询检测，
+ * 未读变化经 pocketUnreadBatch 全量广播下来，本 store 只做镜像；
+ * 检测轮的 lastMsgList 预览也随同一份广播下来（roomPreviews），房间页左列预览据此更新；
+ * markRead 走 invoke 由主进程推进已读水位后广播回来（本地乐观清零只为避免数字闪现，
+ * 广播到达后值一致）。页面没开 / 窗口最小化时未读照常积累，与页面自身轮询无关。
+ */
+import type { PocketRoomChannel, PocketRoomLastMessage, PocketRoomReadMark, PocketUnreadBatch, PocketUnreadRoomState } from '@preload/ipc-contract'
+import { computed, ref } from 'vue'
+
+/** 未读快照镜像：userId（字符串键）→ 单房间状态 */
+const unreadRooms = ref<Record<string, PocketUnreadRoomState>>({})
+
+/** 全部房间未读总数（Dock tab「房间」角标用） */
+const totalUnread = computed(() =>
+  Object.values(unreadRooms.value).reduce((sum, item) => sum + item.count, 0),
+)
+
+/** 已判定「房间关闭中」的旧留言频道（主进程快照镜像）；房间页据此标记左列并恢复按日期查看 */
+const closedChannels = ref<PocketRoomChannel[]>([])
+
+/**
+ * 各频道最新一条消息镜像（channelId 为键）：主进程检测轮（60s）随快照广播，
+ * 房间页左列预览据此更新（替代页面自有轮询）。每次广播整 Map 换新以触发 watch。
+ */
+const roomPreviews = ref<Map<string, PocketRoomLastMessage>>(new Map())
+
+function applyState(state: PocketUnreadBatch): void {
+  unreadRooms.value = state.rooms
+  closedChannels.value = state.closedChannels ?? []
+  roomPreviews.value = new Map(
+    (state.previews ?? []).filter(item => item.channelId).map(item => [item.channelId, item]),
+  )
+}
+
+let installed = false
+
+/** 应用级安装：订阅未读广播并回取一次快照；幂等，每个窗口调用一次 */
+export function installPocketUnread(): void {
+  if (installed)
+    return
+  installed = true
+  window.mainAPI.pocketUnreadBatch(applyState)
+  void window.mainAPI.pocketUnreadState()
+    .then(applyState)
+    .catch((error) => {
+      console.error('[pocket-unread] 未读快照回取失败:', error)
+    })
+}
+
+/** 某房间的未读数（无未读返回 0）；左列房间条目角标用 */
+export function unreadCountOf(userId: number): number {
+  return unreadRooms.value[String(userId)]?.count ?? 0
+}
+
+/** 某房间大/小房间各自的未读数；频道切换 tab 的点点用 */
+export function unreadChannelOf(userId: number): { big: number, small: number } {
+  const entry = unreadRooms.value[String(userId)]
+  return { big: entry?.bigCount ?? 0, small: entry?.smallCount ?? 0 }
+}
+
+/**
+ * 某房间最新一条未读的时刻（无未读返回 0）：左列「谁刚说话」排序用。
+ * 取大 / 小房间两频道的最大值（与主进程 aggregate 同口径）；无未读恒为 0。
+ */
+export function latestUnreadTimeOf(userId: number): number {
+  return unreadRooms.value[String(userId)]?.latestTime ?? 0
+}
+
+/**
+ * 标记房间已读（点进房间 / 贴底看到新消息时调用）。
+ * target 区分大房间 / 小房间（暗号频道）：各有查看入口，进哪个清哪个，另一路保留。
+ * 返回**清零前**的已读水位（null = 频道未解析 / 从未锚定 / 调用失败）供分割线定位；
+ * 主进程同一次调用里先截水位再推水位，调用方不必自己保证取数顺序。
+ * 只传 userId：不传渲染层消息 id——两侧取数不是同一次分页，混写会让已读复活。
+ */
+export async function markRoomRead(userId: number, target: 'room' | 'small' = 'room'): Promise<PocketRoomReadMark | null> {
+  const key = String(userId)
+  const entry = unreadRooms.value[key]
+  // 乐观清零：只清目标频道，另一路（大房间 / 小房间各算一路）保留——
+  // 主进程同样按频道拆分对齐，广播稍后到达，值一致
+  if (entry) {
+    const kept = target === 'small' ? entry.bigCount : entry.smallCount
+    const next = { ...unreadRooms.value }
+    if (kept > 0) {
+      next[key] = {
+        ...entry,
+        count: kept,
+        bigCount: target === 'small' ? kept : 0,
+        smallCount: target === 'small' ? 0 : kept,
+      }
+    }
+    else {
+      delete next[key]
+    }
+    unreadRooms.value = next
+  }
+  try {
+    return await window.mainAPI.pocketMarkRead(userId, target)
+  }
+  catch (error) {
+    console.error('[pocket-unread] 标记已读失败:', error)
+    return null
+  }
+}
+
+/** 未读 store：房间未读的全局镜像与已读标记（模块级单例） */
+export function usePocketUnreadStore() {
+  return { unreadRooms, closedChannels, roomPreviews, totalUnread, unreadCountOf, unreadChannelOf, latestUnreadTimeOf, markRoomRead }
+}
+
+export default usePocketUnreadStore

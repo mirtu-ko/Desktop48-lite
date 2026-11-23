@@ -1,0 +1,1849 @@
+@use 'fluid' as *;
+
+/* ============ 精致浅色主题 ============ */
+:root {
+  /* 品牌色：轻盈紫罗兰，整体更柔和、不厚重 */
+  --brand-primary: #6d5ae0;
+  --brand-primary-light: #a89df6;
+  --brand-primary-dark: #4f3fc4;
+  --brand-secondary: #ff8fb8;
+  /* 需要带透明度的品牌紫时用 rgba(var(--brand-rgb), α)，不要重复写三元组 */
+  --brand-rgb: 109, 90, 224;
+  /* 品牌渐变：主按钮与各处激活态共用，避免逐处手写同一串渐变 */
+  --gradient-brand: linear-gradient(135deg, var(--brand-primary), var(--brand-primary-light));
+  /* 品牌渐变的 hover 变体：两端向「更亮 / 更偏紫」方向各挪一档 */
+  --gradient-brand-hover: linear-gradient(135deg, var(--brand-primary-light), var(--brand-secondary));
+
+  /* ===== 阴影体系：统一为偏紫的柔和多层阴影，替代零散的黑灰投影 ===== */
+  /* 阴影色 = 品牌深紫（与 --brand-primary-dark 同值，改一个另一个要跟着改） */
+  --shadow-rgb: 79, 63, 196;
+  --shadow-xs: 0 1px 2px rgba(var(--shadow-rgb), 0.05);
+  --shadow-sm: 0 1px 2px rgba(var(--shadow-rgb), 0.05), 0 4px 12px -2px rgba(var(--shadow-rgb), 0.1);
+  --shadow-md: 0 4px 12px -2px rgba(var(--shadow-rgb), 0.12), 0 14px 30px -8px rgba(var(--shadow-rgb), 0.2);
+  --shadow-lg: 0 12px 28px -8px rgba(var(--shadow-rgb), 0.18), 0 30px 60px -12px rgba(var(--shadow-rgb), 0.3);
+  /* 品牌主色光晕：渐变按钮 / 激活态使用 */
+  --shadow-glow: 0 6px 18px -6px rgba(var(--brand-rgb), 0.55);
+  /* 蒙版底色：各弹层按需要的透明度取用，不在选择器里重复写三元组 */
+  --overlay-scrim-rgb: 20, 18, 32;
+
+  /* ===== 圆角体系：xs 用于标签 / 徽章等小元素，sm 以上用于面板与卡片 ===== */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  /* lg 跟随高度轴收一点下限，保证矮窗下仍比 md 大一档、与卡片圆角仍有层级差 */
+  --radius-lg: #{fluid(14px, 16px)};
+  /* 全屏详情卡片的卡面圆角（比 lg 再大一档，卡感来自圆角与留白） */
+  --radius-card: #{fluid(16px, 20px)};
+  --radius-pill: 999px;
+
+  /* ===== 窗口外壳 =====
+   * 窗影、圆角都交给系统（窗口不透明，`shadow: true`）：macOS 只在窗口矩形上算命中区域，
+   * 自绘投影需要的内边距会变成窗口的一部分，拖拽 / 缩放就落在阴影边缘上。
+   * 这里只剩边缘高光：浅底上用它托住卡面，深色播放窗改用 rgba(255,255,255,.08)。 */
+  --window-rim: rgba(255, 255, 255, 0.72);
+
+  /* ===== 语义主题色 =====
+   * 语义主题色的唯一来源；模板和脚本只传变量引用，不保存色值。*/
+  --color-lives: #ff5e7e; // 直播 / 录制：玫红
+  --color-rooms: #14b8a6; // 房间（关注成员聊天室）：青
+  --color-shows: #f59e0b; // 公演：琥珀
+  --color-albums: #d946ef; // 专辑：品红
+  --color-members: #3b82f6; // 成员：蓝
+  --color-elections: #d92b3f; // 总选：庆典红（冠军 / 名次分区的强调色）
+  --color-downloads: #10b981; // 下载：绿
+  --color-setting: #6d5ae0; // 设置：品牌紫
+  --color-follow: #ffc53d; // 关注 / 已关注：鎏金（与 Element Plus warning 状态色语义解耦）
+
+  /* ===== 总选奖牌色：名次卡前三名与冠军皇冠共用，TS 侧只传 var() 引用 ===== */
+  --medal-gold: #f7b500;
+  --medal-silver: #bfc8d4;
+  --medal-bronze: #d6924d;
+
+  /* ===== z-index 分层表：全项目堆叠层级一览，新增层先在此登记 =====
+   * 1-9    组件内微层：卡片徽章/标签、播放器内 loading 与占位（局部堆叠，互不越界）
+   * 10-35  播放器浮层（相对 video-box 定位）：loading/封面层(10) < 旋转提示(25)
+   *        < MiniControls 控制条(20) ≈ player-actions 悬浮按钮(30) < 下播结束卡(35)
+   * 30-89  页内浮动件：弹幕侧栏开关(30)、页内磨砂浮动 Dock/TabBar(6 属容器内微层)
+   * 90-99  全局固定浮层：FloatAudioBar 迷你播放条(99)、BackTopButton 回顶按钮(95)、
+   *        DownloadsEntry 下载入口(96)
+   * 0-2    AppDock 内部微层（局部堆叠，不出 Dock）：后仰的玻璃板 .dock-board(0)，
+   *        含板内氛围光 < 激活指示条(1) < 导航项(2)
+   * 100    AppDock 底部导航（页内最高固定层）
+   * 1900   生日贺卡半透明蒙层 + 弹卡（低于 Element Plus 弹层 2000+，保证复制/保存提示可见）
+   * 注：直播 / 回放播放窗已是独立 BrowserWindow，不再参与本窗口的层叠体系 */
+
+  /* ===== 浮层让位：页面内容为悬浮控件预留的空间 =====
+   * 三者都等于某个浮动件的自身高度，因此必须与那几个组件的尺寸同源（都走 fluid），
+   * 否则曲线斜率不一致，栏底到内容顶的间距会随窗口高漂移。 */
+  --tabbar-offset-top: #{fluid(50px, 64px)}; // 左上角 FloatingTabBar 顶距 + 栏高 + 间隙
+  /* 页首浮动控件（左上 tab 栏 / 右上工具条 / 回放页整行）的顶距：四处共用一个值 */
+  --float-top: #{fluid(8px, 12px)};
+  --dock-reserve: #{fluid(80px, 96px)}; // 底部悬浮 AppDock 预留的滚动留白（Dock 高 + 底距，含后仰板投影）
+  /* 列表页内容区统一内边距：上留浮动 tab 栏、左右统一值、下留卡片悬停上浮与阴影 */
+  --page-pad: var(--tabbar-offset-top) var(--space-page-x) 8px;
+
+  /* ===== 高度轴：垂直留白连续变化，不再按档切换 =====
+   * --vh-step 是一个长度：641px（紧凑档原锚点）为 0，900px（基准窗口）为 1。
+   * 垂直量统一写成 fluid(紧凑值, 基准值)（见 _fluid.scss），展开即
+   * clamp(紧凑值, 紧凑值 + 差 * var(--vh-step), 基准值)——
+   * 没有断点，也就没有「窗口矮 1px 整页跳一格」。
+   * data-density 只留给结构性规则（按钮高度、弹窗高度上限、字号台阶）。 */
+  --vh-step: calc((100vh - 641px) / 259);
+
+  /* ===== 密度 token：紧凑档只覆盖这一组，跨组件共用的尺寸放这里 =====
+   * 档位由 html[data-density] 提供，断点值见 src/common/density.ts；正文与消息字号不降。 */
+  /* 水平内距只由窗口宽度决定：1vw 里的 vw 是窗口宽，主进程按工作区宽定窗口宽，两者是上下游。
+   * 紧凑档不覆盖，它参与内容宽计算，改了会让同宽换高度就换列数。
+   * 下限 12 保住小屏排 5 列，宽屏渐增到 32 */
+  --space-page-x: clamp(12px, 1vw, 32px);
+  /* 卡片尺寸只由窗口宽度决定（紧凑档不碰这一组）：小屏按 vw 连续收一档，≥1400 宽回到基准值。
+   * clamp 系数 = 基准值 / 1400，满意档与既有观感逐像素一致。 */
+  --card-gap: clamp(12px, 1.15vw, 16px); // 1:1 卡与专辑网格间距
+  --show-gap: clamp(15px, 1.43vw, 20px); // 公演网格间距比 1:1 卡宽松
+  /* 基准 225 是「1216 窗口排 5 列」与「1920 窗口仍排 7 列」的唯一交集，区间仅 1.6px。
+   * 小屏收到 200：窗口按 1.7 比例变窄后仍保住 5 列，单卡等比缩小而不是掉列撑大。 */
+  --card-min: min(
+    clamp(200px, 16.1vw, 225px),
+    calc((100% - 3 * var(--card-gap)) / 4)
+  ); // 1:1 封面卡（直播 / 回放）：带 200–265
+  --show-min: min(
+    300px,
+    max(clamp(230px, 18.6vw, 260px), calc((100% - 3 * var(--show-gap)) / 4))
+  ); // 16:9 封面卡（公演）：带 300–380，地板 260→230
+  --album-min: min(
+    265px,
+    max(clamp(215px, 17.2vw, 240px), calc((100% - 3 * var(--card-gap)) / 4))
+  ); // 专辑横排卡：带 265–335，地板 240→215
+  /* 卡片内部尺寸：与卡宽同源，封面 / 黑胶 / 横排间距 / 内距一起收 */
+  --album-cover: clamp(86px, 6.9vw, 96px);
+  --album-vinyl: clamp(74px, 5.9vw, 82px);
+  --album-label: clamp(30px, 2.45vw, 34px);
+  --album-inner-gap: clamp(20px, 2.3vw, 32px);
+  --album-inset: clamp(9px, 0.86vw, 12px);
+  --card-body-pad: #{fluid(7px, 10px) fluid(9px, 12px) fluid(9px, 12px)}; // 封面下方文字区
+  --dock-item-w: #{fluid(46px, 56px)}; // Dock 单项宽
+  --dock-icon: #{fluid(32px, 40px)}; // Dock 图标磁贴边长
+  --dock-gap: #{fluid(5px, 8px)}; // Dock 项间距
+
+  /* ===== 浅色玻璃表层 token：底部 Dock / 左上 tab 栏 / 右上工具条 / 左下播放条共用 =====
+   * 观感由四层叠出来：光带给体积、底色定通透、边给厚度、落影让它浮起来。
+   * 右下角回顶钮不走玻璃，它直接复用刷新按钮的 el-button circle primary */
+  --glass-fill: color-mix(in srgb, var(--el-bg-color) 54%, transparent);
+  --glass-sheen: linear-gradient(
+    170deg,
+    rgba(255, 255, 255, 0.66) 0%,
+    rgba(255, 255, 255, 0.18) 44%,
+    rgba(255, 255, 255, 0) 72%,
+    rgba(255, 255, 255, 0.14) 100%
+  );
+  --glass-blur: blur(26px) saturate(200%) brightness(1.06);
+  /* 顶边锐高光 + 底边折射线 + 一圈内环（不用 1px 均匀描边：真玻璃的边是上亮下暗的） */
+  --glass-lip:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92), inset 0 -1px 0 rgba(255, 255, 255, 0.52),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.34);
+  /* 最外 1px 冷灰压边（浅底上白边看不见，靠它兜住「有边」）+ 接触影 + --shadow-lg */
+  --glass-edge-rgb: 120, 118, 160;
+  --glass-shadow:
+    0 0 0 1px rgba(var(--glass-edge-rgb), 0.07), 0 2px 6px -1px rgba(var(--shadow-rgb), 0.1), var(--shadow-lg);
+
+  /* ===== 播放器深色玻璃 token：.action-btn / .player-capsule 体系共用 =====
+   * 一律不带 backdrop-filter：这些元素都悬在视频上，每帧模糊在 DWM 合成退化
+   * （多屏/高刷致 MPO 关闭）时成本翻倍，改用加深的实色底压画面 */
+  --player-glass-bg: rgba(15, 17, 26, 0.68);
+  --player-glass-ring: rgba(255, 255, 255, 0.16);
+  --player-glass-hover: rgba(255, 255, 255, 0.12);
+}
+
+/* ===== 紧凑档：html[data-density='compact'] 由 main.ts 按 src/common/density.ts 的断点写入 =====
+ * 垂直留白与装饰尺寸都已改由 --vh-step 连续驱动（fluid()，见 _fluid.scss），
+ * 这里只剩「不能连续变」的结构性规则：EP 按钮高度（构建期常量）、弹窗高度上限、字号台阶。
+ * 一律不碰参与内容宽计算的变量（列宽 / 网格间距 / 水平内距）。 */
+:root[data-density='compact'] {
+  /* EP 默认按钮高度构建期写死 32px，只能运行时覆写；圆钮与 small / large 保持原尺寸 */
+  .el-button:not(.is-circle):not(.el-button--small):not(.el-button--large):not(.is-link):not(.is-text) {
+    height: 28px;
+    padding: 6px 13px;
+  }
+
+  /* 字号默认是台阶（连续缩放下会落在非整数字号上），
+   * 例外只有决定浮层高度的那两处（tab 栏、Dock 标签），它们必须与高度契约同曲线 */
+  .section-title {
+    font-size: 13px;
+  }
+
+  .detail-side-title {
+    font-size: 17px;
+  }
+
+  /* 86vh 在矮屏只剩五百出头，放宽到 90vh 把空间给可滚区 */
+  .detail-card-dialog.el-dialog {
+    height: min(90vh, 660px);
+  }
+
+  /* 履历卡上限仍是 640，不跟着放宽 */
+  .detail-card-dialog.election-history-dialog.el-dialog {
+    height: min(90vh, 640px);
+  }
+}
+
+/* ===== Element Plus 变量覆写（浅色） =====
+ * 用 html:root 而非 :root：Element Plus 的 base.css 同样在 :root 定义这些变量，
+ * 同特异性下由加载顺序决定胜负；组件样式改为按需后顺序不再可控，提一级抛开顺序依赖。*/
+html:root {
+  --el-color-primary: var(--brand-primary);
+  --el-color-primary-light-3: #8f82ee;
+  --el-color-primary-light-5: #b6abf6;
+  --el-color-primary-light-7: #ddd6fb;
+  --el-color-primary-light-8: #eae6fd;
+  --el-color-primary-light-9: #f3f0fe;
+  --el-color-primary-dark-2: #5946c7;
+
+  --el-border-radius-base: 10px;
+  --el-border-radius-small: 8px;
+  --el-border-radius-round: 20px;
+
+  /* 页面底色与边框：带一点紫调的冷灰，边缘与层级更清晰 */
+  --el-bg-color-page: #eef0f8;
+  --el-border-color: #c9cbe0;
+  --el-border-color-light: #dcddeb;
+  --el-border-color-lighter: #e7e7f2;
+  --el-border-color-extra-light: #f1f2fa;
+  --el-card-border-radius: 14px;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  /* 窗口底板必须透明：圆角外那圈窗口区域要透出桌面，
+     否则由 WebView 默认底色填成实色方块，圆角就成了摆设 */
+  background: transparent;
+  color: var(--el-text-color-primary);
+  font-family: 'PingFang SC', 'Helvetica Neue', Helvetica, 'Microsoft YaHei', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  padding: 0;
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  /* 不在这里涂底色：主窗与播放窗都是透明窗口，留白区（窗口圆角外、
+     投影边距内）必须是真透明像素。底色由各自的外壳元素承担
+     （主窗 .app-frame / 播放窗 .fw-root）。 */
+  color: var(--el-text-color-primary);
+  font-family: 'PingFang SC', 'Helvetica Neue', Helvetica, 'Microsoft YaHei', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 键盘焦点框：桌面端以鼠标交互为主，隐藏方向键/Tab 触发的默认选中态。
+ * !important 用于压过 Element Plus 组件级 :focus-visible（如 .el-button）；
+ * 输入框等组件的聚焦反馈走自绘 box-shadow 边框，不受影响 */
+:focus,
+:focus-visible {
+  outline: none !important;
+}
+
+/* 分区标题：画布是渐变，横线用底色遮不住会露出色块，这里只留标题文字 */
+.el-divider.el-divider--horizontal {
+  border-top: none;
+}
+
+.el-divider__text {
+  padding: 0;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.5px;
+  color: var(--el-text-color-secondary);
+  background-color: transparent;
+}
+
+/* 左对齐标题与下方卡片左边缘对齐 */
+.el-divider__text.is-left {
+  left: 0;
+}
+
+/* 品牌渐变主按钮：全局唯一样式出处 */
+.el-button--primary {
+  background: var(--gradient-brand);
+  border: none;
+  box-shadow: var(--shadow-glow);
+
+  &:hover {
+    background: var(--gradient-brand-hover);
+  }
+}
+
+/* 列表页统一滚动容器：占满高度并裁掉横向溢出 */
+.scrollbar-wrapper {
+  height: 100%;
+  overflow-x: hidden !important;
+}
+
+/* 精致滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(var(--shadow-rgb), 0.16);
+  border-radius: var(--radius-sm);
+  border: 2px solid transparent;
+  background-clip: content-box;
+
+  &:hover {
+    background: rgba(var(--shadow-rgb), 0.3);
+    background-clip: content-box;
+  }
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 列表触底提示（直播/回放/公演三页统一） */
+.list-end {
+  padding: 16px 0 24px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+}
+
+/* ===== 空态 =====
+ * .page-empty：el-empty 列表页定制（留白 + 描述文字提亮）；
+ * .empty-hint：行内占位提示；.empty-block：页面级居中占位文案 */
+.page-empty {
+  padding: 80px 0 0;
+
+  .el-empty__description p {
+    color: var(--el-text-color-secondary);
+  }
+}
+
+.empty-hint {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+}
+
+.empty-block {
+  padding: var(--dock-reserve) 0;
+  text-align: center;
+  color: var(--el-text-color-placeholder);
+}
+
+/* ===== 列表分区标题（公演 / 成员 / 总选页共用） =====
+ * 结构：主题色小药丸 + 标题文字 + 右侧渐隐细线；
+ * 主题色由 --st-accent 注入，默认品牌紫；
+ * 在自带描边/底色的容器（队伍头部条、详情卡片）里，
+ * 尾线与容器描边重复，由使用方隐藏 ::after */
+.section-title {
+  --st-accent: var(--brand-primary);
+
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: fluid(12px, 20px) 2px fluid(8px, 12px);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--el-text-color-primary);
+
+  &::before {
+    content: '';
+    flex: none;
+    width: 3px;
+    height: fluid(12px, 14px);
+    border-radius: var(--radius-pill);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--st-accent) 60%, white), var(--st-accent));
+    box-shadow: 0 0 8px color-mix(in srgb, var(--st-accent) 35%, transparent);
+  }
+
+  &::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    margin-left: 4px;
+    border-radius: var(--radius-pill);
+    background: linear-gradient(90deg, color-mix(in srgb, var(--st-accent) 35%, transparent), transparent 75%);
+  }
+}
+
+/* 标题变体：直播氛围暖粉（公演页“即将开始”） */
+.section-title--live {
+  --st-accent: #ff6f91;
+}
+
+/* 标题变体：弱化灰（历史公演 / 成员页暂休退团） */
+.section-title--muted {
+  --st-accent: var(--el-text-color-secondary);
+}
+
+/* 标题变体：总选庆典红（星光 / 高飞 / 梦想 / 未来组） */
+.section-title--elections {
+  --st-accent: var(--color-elections);
+}
+
+/* 分区计数徽章：成员页人数 / 总选页名次段（TOP16 等）共用，色随所在标题的 --st-accent */
+.section-count {
+  flex: none;
+  padding: 1px 9px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.7;
+  color: color-mix(in srgb, var(--st-accent) 62%, #24223a);
+  background: color-mix(in srgb, var(--st-accent) 16%, var(--el-bg-color));
+  font-variant-numeric: tabular-nums;
+}
+
+/* 玻璃浮层面板：左右上角 tab 栏 / 工具条、左下播放条等共用的表层。
+ * 配方全部来自 :root 的 --glass-* token（见上），这里只是把它们组装起来，
+ * 因此不要再往这里写死颜色 —— 要调观感去改 token */
+.frosted-surface {
+  background: var(--glass-sheen), var(--glass-fill);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-shadow), var(--glass-lip);
+}
+
+/* 深玻璃变体：独立播放窗（FloatWindowApp 的标题栏）用。背后是视频画面，底色要更实才压得住，
+ * 光带同步收敛，否则大片高光会糊住画面。只覆写 token，不重写上面那三条声明 */
+.frosted-surface--deep {
+  --glass-fill: color-mix(in srgb, var(--el-bg-color) 88%, transparent);
+  --glass-sheen: linear-gradient(
+    170deg,
+    rgba(255, 255, 255, 0.44) 0%,
+    rgba(255, 255, 255, 0.08) 42%,
+    rgba(255, 255, 255, 0) 68%
+  );
+}
+
+/* 磨砂玻璃卡片（设置页等内容卡片统一外观） */
+.glass-card {
+  border: 1px solid color-mix(in srgb, var(--el-border-color) 55%, #ffffff);
+  background: color-mix(in srgb, var(--el-bg-color) 88%, transparent);
+  backdrop-filter: blur(16px) saturate(180%);
+  box-shadow: var(--shadow-sm);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+  }
+}
+
+/* ===== 应用标题栏配方：主窗 AppTitleBar 与独立播放窗 .fw-bar 共用 =====
+ * 只定义「皮肤」（底色渐变 + 底边 + 落影 + 按钮外观）；
+ * 分区布局（justify-content / gap / padding）由各窗自持 —— 主窗是「品牌靠左 + 按钮靠右」，
+ * 视频窗是「标签 / 头像 / 标题 + 按钮」的连续流，二者无法共用一套排布。 */
+.app-title-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  background:
+    radial-gradient(320px 90px at 12% -70%, rgba(var(--brand-rgb), 0.14), transparent 70%),
+    linear-gradient(90deg, #f1eefd, #eceefa);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  box-shadow: 0 1px 2px rgba(var(--shadow-rgb), 0.04);
+  color: var(--el-text-color-primary);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+/* 按钮组：撑满条高、按钮间无缝 */
+.app-title-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  height: 100%;
+  flex-shrink: 0;
+  /* 按钮区不参与拖拽，否则点不中 */
+  -webkit-app-region: no-drag;
+}
+
+/* 按钮宽 / 图标边长由各窗注入：主窗不定义即用默认值（44 / 15），
+   独立播放窗在 .fw-bar 里按窗口宽度收窄（窄窗三个按钮会吃掉四成屏宽）；
+   高度始终撑满整条栏，栏高本身由 .fw-bar 按宽度收 */
+.app-title-bar-btn {
+  width: var(--bar-btn-w, 44px);
+  height: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--el-text-color-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 图标不传 size 即 1em，由字号决定边长 */
+  font-size: var(--bar-icon-size, 15px);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+
+  svg {
+    display: block;
+  }
+
+  &:hover,
+  &:focus {
+    background: rgba(var(--brand-rgb), 0.1);
+    color: var(--brand-primary);
+  }
+}
+
+/* 关闭键 hover 改走红色，与普通按钮的品牌紫区分破坏性操作 */
+.app-title-bar-btn--close:hover,
+.app-title-bar-btn--close:focus {
+  background: linear-gradient(135deg, #e5484d, #e03d52);
+  color: #fff;
+  box-shadow: 0 2px 8px -2px rgba(224, 61, 82, 0.5);
+}
+
+/* ===== 实底列表卡片皮肤（直播 / 回放 / 公演 / 成员列表卡共用） =====
+ * 与 .glass-card（磨砂半透明）语义不同，二者并存；
+ * hover 上浮仅在 .clickable 时启用，非可点击卡片保持静止 */
+.lift-card {
+  overflow: hidden;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--radius-md);
+  background: var(--el-bg-color);
+  box-shadow: var(--shadow-sm);
+  transition:
+    transform 0.2s ease-in-out,
+    box-shadow 0.2s ease-in-out;
+
+  &.clickable {
+    cursor: pointer;
+
+    &:hover {
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-md);
+    }
+  }
+}
+
+/* ===== 页面根容器骨架（列表页最外层共用） =====
+ * 浮层 tab / dock 均为 absolute 定位，由根容器负责占满整窗并裁剪溢出 */
+.page-root {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 列表页滚动区统一给底部 Dock 留出空间。
+ * 用 `.page-root` 后代限定而非全局：非列表页（设置）直接以 el-scrollbar 为根、
+ * 内容区自带 --dock-reserve 内边距，重复给会变成双份留白 */
+.page-root .el-scrollbar__view {
+  padding-bottom: var(--dock-reserve);
+}
+
+/* ===== 跨页共用的版式片段 =====
+ * 出现在 ≥2 处、且值完全一致的片段收敛到这里，页面与组件里只挂类名 */
+
+/* 卡片网格：直播 / 回放两个列表页共用列宽与内容区留白。
+ * minmax 再套一层 min()：容器比 --card-min 还窄时（窄窗口分屏）列宽跟随容器，不撑出横向滚动 */
+.card-grid {
+  display: grid;
+  gap: var(--card-gap);
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--card-min), 100%), 1fr));
+  padding: var(--page-pad);
+}
+
+/* 图片占位兜底：封面 / 头像在加载中或失败时居中显示 */
+.media-ph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--el-text-color-placeholder);
+  background: var(--el-fill-color-light);
+}
+
+/* 图片铺满容器：卡片封面 / 唱片盘标 / 电台封面共用 */
+.media-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* ===== 圆环头像卡：成员卡（MemberCard）与总选名次卡（ElectionRankCard）共用 =====
+ * 无实底卡片皮肤：透明底，悬浮时才浮出「强调色柔光卡」；头像带主题色渐变环与
+ * 顶部高光，悬浮时头像放大并亮起旋转流光环。强调色由卡片根节点内联注入
+ * --avatar-accent（成员页是队色，总选页前三名是奖牌色）；头像尺寸走
+ * --avatar-size（默认 92px，总选页网格注入 112px）。 */
+
+.card-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  transition:
+    background-color 0.22s ease,
+    border-color 0.22s ease,
+    box-shadow 0.22s ease,
+    transform 0.22s ease;
+
+  &:hover {
+    transform: translateY(-3px);
+    border-color: color-mix(in srgb, var(--avatar-accent, var(--brand-primary)) 45%, transparent);
+    background: var(--el-bg-color);
+    box-shadow:
+      0 6px 16px -6px color-mix(in srgb, var(--avatar-accent, var(--brand-primary)) 45%, transparent),
+      var(--shadow-sm);
+  }
+}
+
+/* 头像槽：不参与伸缩；缩放作用在内层 .avatar-wrap 上 */
+.avatar-slot {
+  position: relative;
+  flex: none;
+}
+
+/* 头像圆形容器：渐变光环 + 顶部高光 */
+.avatar-wrap {
+  position: relative;
+  width: var(--avatar-size, 92px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  padding: 3px;
+  background: radial-gradient(circle at 30% 20%, #fff, rgba(255, 255, 255, 0));
+  transition: transform 0.25s ease;
+  transform-origin: center;
+
+  .card-item:hover & {
+    transform: scale(1.08);
+  }
+
+  &::before {
+    /* 主题色渐变光环（跟随卡片强调色；无强调色时回退为蓝紫渐变） */
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 2px;
+    background: linear-gradient(
+      135deg,
+      var(--avatar-accent, #4f6ef7),
+      var(--avatar-accent, #a94ff7) 60%,
+      var(--avatar-accent, #50c8ff)
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: 0.85;
+  }
+
+  &::after {
+    /* 顶部高光：营造玻璃质感 */
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(160deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 45%);
+    pointer-events: none;
+  }
+
+  /* 圆形头像本身 */
+  .avatar {
+    position: relative;
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    overflow: hidden;
+    background: var(--el-fill-color-light);
+  }
+}
+
+/* 悬浮流光环：锥形渐变沿环转动，只靠 opacity 淡入淡出，避免动 background（不可过渡） */
+.avatar-flow {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0%,
+    var(--avatar-accent, #4f6ef7) 16%,
+    transparent 38%,
+    var(--avatar-accent, #a94ff7) 62%,
+    transparent 86%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+
+  .card-item:hover & {
+    opacity: 1;
+    animation: spin 2.4s linear infinite;
+  }
+}
+
+/* 名次徽章：吊在头像右下角（总选名次卡与领奖台共用）。默认中性色，
+ * 加 is-medal 并注入 --medal 后转金银铜渐变 */
+.rank-badge {
+  position: absolute;
+  right: -3px;
+  bottom: 1px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--el-text-color-regular);
+  background: var(--el-bg-color);
+  box-shadow:
+    0 0 0 2px var(--el-bg-color),
+    0 2px 6px -2px rgb(0 0 0 / 0.25);
+
+  &.is-medal {
+    color: color-mix(in srgb, var(--medal) 25%, #000);
+    background: linear-gradient(160deg, color-mix(in srgb, var(--medal) 78%, #fff), var(--medal));
+    box-shadow:
+      0 0 0 2px var(--el-bg-color),
+      0 2px 6px -1px color-mix(in srgb, var(--medal) 55%, transparent);
+  }
+}
+
+/* 头像加载失败兜底：姓氏占位，色随注入的 --gc / --gc-ink（字号由各组件按头像大小覆盖） */
+.avatar-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-weight: 600;
+  color: var(--gc-ink, var(--el-text-color-secondary));
+  background: color-mix(in srgb, var(--gc, var(--brand-primary)) 14%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-item,
+  .avatar-wrap,
+  .avatar-flow {
+    transition: none;
+  }
+
+  .card-item:hover {
+    transform: none;
+  }
+
+  .avatar-flow {
+    animation: none;
+  }
+}
+
+/* ===== 药丸徽章底座：.album-tag / .team-badge 共用的外观骨架 =====
+ * 两类徽章同一套视觉语言（药丸形 + 11px 白字），仅底色配方与 display 不同，
+ * 骨架在此只写一份；display 由各自补充（album-tag 默认 inline，team-badge 居中 inline-flex） */
+.album-tag,
+.team-badge {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  line-height: 1.6;
+  color: #fff;
+}
+
+/* 专辑类型徽章：专辑网格卡片与专辑详情卡片共用。EP 玫粉 / 专辑 品牌紫 / 单曲 青绿，
+ * 未知 tag 走中性灰兜底（语义色见本文件的 --color-* 变量） */
+.album-tag {
+  background: linear-gradient(135deg, #909399, color-mix(in srgb, #909399 70%, #fff));
+  box-shadow: 0 3px 8px -3px rgba(144, 147, 153, 0.55);
+
+  &.album-tag--ep {
+    background: linear-gradient(135deg, var(--color-lives), #ff8fb0);
+    box-shadow: 0 3px 8px -3px color-mix(in srgb, var(--color-lives) 55%, transparent);
+  }
+
+  &.album-tag--zj {
+    background: var(--gradient-brand);
+    box-shadow: 0 3px 8px -3px color-mix(in srgb, var(--brand-primary) 55%, transparent);
+  }
+
+  &.album-tag--sg {
+    /* 亮端由语义色白化派生 */
+    background: linear-gradient(135deg, var(--color-downloads), color-mix(in srgb, var(--color-downloads) 70%, #fff));
+    box-shadow: 0 3px 8px -3px color-mix(in srgb, var(--color-downloads) 55%, transparent);
+  }
+}
+
+/* 未读数字角标：红色胶囊 + 白字，单位数占 16px 方块、两位数自动撑宽。
+ * 只描述外观与排版，落点由使用处决定（房间列表贴头像角、频道页签跟在文字后）。
+ * 房间列表与频道页签共用，避免同页出现两种规格的未读标记 */
+.unread-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: #fff;
+  background: var(--el-color-danger);
+}
+
+/* 专辑封面：解码完成才淡入，铺满容器见 .media-fill */
+.cover-src {
+  animation: fade-in 0.25s ease;
+}
+
+/* 纯透明度淡入：.cover-src（封面淡入）与 .rotate-hint（旋转提示浮现）共用。
+ * 时长 / 缓动由使用方在 animation 里给 */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* 封面加载失败时的品牌色兜底（图标由调用方放在默认插槽里） */
+.cover-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: color-mix(in srgb, var(--brand-primary) 12%, var(--el-bg-color));
+  color: var(--brand-primary);
+
+  .el-icon {
+    font-size: 26px;
+  }
+}
+
+/* 黑胶唱片：同心圆纹 + 品牌色环境反光 + 玻璃高光。尺寸与落点由调用方给 */
+.vinyl {
+  position: absolute;
+  z-index: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(var(--brand-rgb), 0.18) 0 26%, transparent 27%),
+    repeating-radial-gradient(circle at 50% 50%, #191920 0 2px, #23232c 2px 3px);
+  box-shadow:
+    0 8px 16px -6px rgba(var(--shadow-rgb), 0.4),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* 玻璃高光 */
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 45%);
+  }
+}
+
+/* 唱片中心盘标：用封面图充当，默认自旋（@keyframes spin 见本文件）。
+ * 尺寸由调用方给；「悬停才转」的列表卡片覆写 animation-play-state 即可 */
+.vinyl-label {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  background-size: cover;
+  background-position: center;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
+  animation: spin 7s linear infinite;
+  overflow: hidden;
+
+  /* 中心孔 */
+  &::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    margin: -3px 0 0 -3px;
+    border-radius: 50%;
+    background: var(--el-bg-color);
+  }
+}
+
+/* ===== 详情卡片共用（MemberDetailCard / AlbumDetailCard / DownloadsCard） =====
+ * 三张卡只在「左右栏放什么」上不同：外壳、卡面、关闭钮、滚动列一律用这里的定义。
+ * 差异化走变量注入 —— --accent 是卡面主题色（投影跟着它走），
+ * --detail-close-bg / --detail-close-ink 是关闭钮的底色与图标色（按所在底色的深浅给） */
+
+/* 蒙版：让背景虚化退场，而不是被纯黑盖住 */
+.detail-card-overlay.el-overlay {
+  background: rgba(var(--overlay-scrim-rgb), 0.5);
+  backdrop-filter: blur(6px);
+}
+
+/* 对话框外壳：卡面自带圆角与内边距，清掉默认 header 与 padding。
+ * 定高而不是内容撑高，否则不同条目的资料长短会让卡片高度跳 */
+.detail-card-dialog.el-dialog {
+  --el-dialog-padding-primary: 0;
+
+  width: min(92vw, 980px);
+  height: min(86vh, 660px);
+  padding: 0;
+  border-radius: var(--radius-card);
+  background: transparent;
+  box-shadow: none;
+  overflow: hidden;
+
+  .el-dialog__header {
+    display: none;
+  }
+
+  .el-dialog__body {
+    height: 100%;
+    padding: 0;
+    overflow: hidden;
+    /* 详情卡按卡宽适配（见 .detail-side 的容器查询）；inline-size 只建立行轴容器。
+     * 它会让本元素成为绝对定位包含块，卡内浮标须自带 position:relative 锚点 */
+    container-type: inline-size;
+  }
+}
+
+/* 总选履历卡：内容是一张走势图 + 一列明细，比成员 / 专辑卡窄一档 */
+.detail-card-dialog.election-history-dialog.el-dialog {
+  width: min(92vw, 660px);
+  height: min(86vh, 640px);
+}
+
+/* 房间精华消息弹层：单栏消息列表，比成员 / 专辑卡窄一档（高度仍用基准，列表自己滚） */
+.detail-card-dialog.essence-dialog.el-dialog {
+  width: min(92vw, 660px);
+}
+
+/* 按日期查看弹层：与精华弹层同宽，日期条占用后列表自己滚 */
+.detail-card-dialog.room-date-dialog.el-dialog {
+  width: min(92vw, 660px);
+}
+
+/* ===== 预备生升格弹窗（房间资料卡） =====
+ * 弹窗根节点是 el-dialog 的 Teleport 内容，组件 scoped 样式够不到，
+ * 所以外壳（底色 / 圆角 / EP 内部盒的 padding / 蒙版）写在这里；插槽内容仍在组件内。 */
+.promote-overlay.el-overlay {
+  background: rgba(var(--overlay-scrim-rgb), 0.42);
+  backdrop-filter: blur(6px);
+}
+
+.promote-dialog.el-dialog {
+  --el-dialog-padding-primary: 20px;
+  --el-dialog-border-radius: 22px;
+  /* 队色缺省：某个队伍没下发颜色时整弹窗统一回落到品牌紫 */
+  --tc: var(--brand-primary);
+
+  width: min(400px, 92vw);
+  background: radial-gradient(120% 90% at 50% -30%, rgba(var(--brand-rgb), 0.16), transparent 62%), var(--el-bg-color);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+
+  .el-dialog__header {
+    padding: 0;
+    margin: 0;
+  }
+
+  .el-dialog__footer {
+    padding-top: 14px;
+  }
+}
+
+/* 卡面：左右怎么分栏由调用方定（成员卡是上立绘下操作条，专辑卡是左专辑栏右曲目） */
+.detail-card {
+  --accent: var(--brand-primary);
+
+  position: relative;
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  background: var(--el-bg-color);
+  box-shadow:
+    0 28px 70px -18px color-mix(in srgb, var(--accent) 42%, transparent),
+    var(--shadow-lg);
+}
+
+/* 关闭钮：浮在卡面右上角，悬停转 90° 并转成危险色 */
+.detail-close {
+  position: absolute;
+  top: fluid(10px, 12px);
+  right: fluid(10px, 12px);
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fluid(26px, 28px);
+  height: fluid(26px, 28px);
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  color: var(--detail-close-ink, #fff);
+  background: var(--detail-close-bg, rgba(20, 18, 32, 0.42));
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    transform 0.25s ease;
+
+  &:hover {
+    background: var(--el-color-danger);
+    color: #fff;
+    transform: rotate(90deg);
+  }
+}
+
+/* 卡内滚动列：细滚动条 + 键盘焦点环。
+ * ↑ / ↓ 已被卡片占用切上一条 / 下一条，键盘滚动靠聚焦后的 PgUp / PgDn */
+.detail-scroll {
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  /* 卡片内的滚动条收细，避免打断卡面 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--el-border-color) transparent;
+
+  &::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: var(--radius-xs);
+    background-clip: content-box;
+    background-color: var(--el-border-color);
+  }
+
+  &:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--brand-primary) 45%, transparent);
+    outline-offset: -2px;
+  }
+}
+
+/* 卡片内容的入场：外壳不动，内部元素错峰上浮。
+ * 三卡共用同一条曲线与时长，延迟各排各的（成员卡右栏 / 专辑卡左栏 + 曲目） */
+@keyframes detail-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ===== 详情卡片共用 · 左右栏骨架 =====
+ * 左右分栏的两张卡（专辑 / 下载）结构一致：左栏是「氛围底 + 可滚动列 + 居中内容列」，
+ * 右栏是「标题头 + 可滚动内容区」，只有栏宽 / 间距 / 放什么不同 —— 故骨架收在这里，
+ * 差异由各卡注成变量：--side-basis 栏宽，--side-pad / --side-gap / --side-justify 内容列排布，
+ * --pane-head-pad 标题头左内距。氛围层（专辑卡模糊封面、下载卡主题色底）差异太大，各卡自画。
+ * 成员卡是「上立绘 + 下操作条」的纵向分栏，不用这一层。 */
+
+/* 左栏：定宽不伸缩 + 裁剪（氛围层的出血由它兜住）。栏宽由各卡注入，缺省值只是兜底 */
+.detail-side {
+  position: relative;
+  flex: 0 0 var(--side-basis, 320px);
+  display: flex;
+  overflow: hidden;
+  background: var(--el-fill-color-light);
+}
+
+/* 卡宽 92vw 缩到 740 以下（窗口约 804）时左栏收到 220，把宽度让给右栏；
+ * 两栏结构保持不变，下卡注入的 --side-basis 在宽屏下照常生效。
+ * 用容器查询而非媒体查询：卡宽由 min(92vw, 980px) 决定，判断要贴着卡自己 */
+@container (max-width: 740px) {
+  .detail-side {
+    max-width: 220px;
+  }
+}
+
+.detail-side-body {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 左栏内容列。box-sizing 必须显式声明：项目没有全局 border-box 重置，
+ * content-box 下 width:100% + 左右 padding 会把这一栏撑出容器、被 .detail-side 的 overflow 切掉 */
+.detail-side-inner {
+  box-sizing: border-box;
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: var(--side-justify, space-evenly);
+  gap: var(--side-gap, 10px);
+  width: 100%;
+  padding: var(--side-pad, 26px 22px 22px);
+  text-align: center;
+}
+
+/* 左栏标题与计数行；限行等差异由各卡覆写（scoped 规则特异度更高） */
+.detail-side-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+
+.detail-side-count {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 右栏：标题头 + 可滚动内容区 */
+.detail-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.detail-pane-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* 右侧给关闭钮留位 */
+  padding: fluid(12px, 17px) fluid(44px, 50px) fluid(8px, 12px) var(--pane-head-pad, fluid(18px, 22px));
+  border-bottom: 1px solid var(--el-border-color-extra-light);
+}
+
+.detail-pane-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.detail-pane-sub {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+}
+
+/* 错峰上浮：左栏内容列逐块、右栏标题头、右栏列表行逐行。
+ * 步长与上界只在这里写一份，免得每张卡各写一个 @for、上界还要跟着子块数量改。
+ * 上界 6：左栏内容列最多 6 块，少写一块的话最后那块会退回 delay 0，反而排在前面先出现 */
+.detail-side-inner > *,
+.detail-pane-head,
+.detail-pane-row {
+  animation: detail-enter 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.detail-side-inner {
+  @for $i from 1 through 6 {
+    > *:nth-child(#{$i}) {
+      animation-delay: 0.04s * $i;
+    }
+  }
+}
+
+.detail-pane-head {
+  animation-delay: 0.06s;
+}
+
+/* 列表行只错峰前 8 行，序号由模板的行内 --i 给（列表再长，后面几行一起进来） */
+.detail-pane-row {
+  animation-delay: calc(0.08s + min(var(--i, 0), 8) * 0.03s);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .detail-side-inner > *,
+  .detail-pane-head,
+  .detail-pane-row {
+    animation: none;
+  }
+}
+
+/* 浮动工具条（FloatingRefreshDock）插槽里的说明文字 */
+.dock-note {
+  margin-left: 8px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+
+/* ===== 确认弹窗共用（ElMessageBox） =====
+ * 全项目的 ElMessageBox 二次确认都走这一套：蒙版直接复用 .detail-card-overlay，
+ * 圆角 / 投影 / 标题药丸沿用卡片与 .section-title 的配方。用法：
+ *   ElMessageBox.confirm(message, title, {
+ *     customClass: 'app-confirm',
+ *     modalClass: 'detail-card-overlay',
+ *   })
+ * 主题色由 --confirm-accent 注入，缺省品牌紫：图标徽章、标题药丸、顶部氛围光都跟着它走 */
+.el-message-box.app-confirm {
+  --confirm-accent: var(--brand-primary);
+
+  max-width: 420px;
+  padding: 0;
+  border-radius: var(--radius-card);
+  box-shadow:
+    0 28px 64px -20px color-mix(in srgb, var(--confirm-accent) 40%, transparent),
+    var(--shadow-lg);
+  overflow: hidden;
+
+  /* 顶部氛围光：卡面不靠描边分层，靠这层主题色光晕拉开层次 */
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: 96px;
+    background: radial-gradient(
+      120% 100% at 15% 0%,
+      color-mix(in srgb, var(--confirm-accent) 14%, transparent),
+      transparent 72%
+    );
+    pointer-events: none;
+  }
+
+  /* 右侧留出关闭钮的位置 */
+  .el-message-box__header {
+    position: relative;
+    padding: 22px 48px 0 24px;
+  }
+
+  /* 标题前的主题色药丸：与 .section-title 同一造型 */
+  .el-message-box__title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 22px;
+    color: var(--el-text-color-primary);
+
+    &::before {
+      content: '';
+      flex: none;
+      width: 3px;
+      height: 14px;
+      border-radius: var(--radius-pill);
+      background: linear-gradient(180deg, color-mix(in srgb, var(--confirm-accent) 60%, #fff), var(--confirm-accent));
+      box-shadow: 0 0 8px color-mix(in srgb, var(--confirm-accent) 35%, transparent);
+    }
+  }
+
+  /* 关闭钮：圆形，悬停转 90° 并转危险色（与详情卡片的关闭钮同一手感） */
+  .el-message-box__headerbtn {
+    top: 18px;
+    right: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 14px;
+    transition:
+      background-color 0.2s ease,
+      transform 0.25s ease;
+
+    .el-message-box__close {
+      color: var(--el-text-color-secondary);
+      transition: color 0.2s ease;
+    }
+
+    &:hover {
+      background: var(--el-fill-color);
+      transform: rotate(90deg);
+
+      .el-message-box__close {
+        color: var(--el-color-danger);
+      }
+    }
+  }
+
+  .el-message-box__content {
+    position: relative;
+    padding: 16px 24px 0;
+    font-size: 13px;
+    color: var(--el-text-color-regular);
+  }
+
+  /* 多行正文从图标顶部对齐，不随行数上下居中 */
+  .el-message-box__container {
+    align-items: flex-start;
+  }
+
+  /* 语义图标做成圆形磁贴：底色与描边取图标自身的语义色，不另设色号。
+   * 上移 4px 让圆心对齐首行文字中线（磁贴 32px，正文行高 24px） */
+  .el-message-box__status {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    margin-top: -4px;
+    border-radius: 50%;
+    font-size: 18px;
+    background: color-mix(in srgb, currentcolor 13%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, currentcolor 26%, transparent);
+  }
+
+  .el-message-box__message {
+    font-size: 13px;
+    line-height: 1.65;
+  }
+
+  .el-message-box__btns {
+    padding: 22px 24px;
+    gap: 10px;
+
+    .el-button {
+      min-width: 92px;
+      margin-left: 0;
+      border-radius: var(--radius-sm);
+    }
+
+    /* 取消走描边次级按钮，画面留给品牌渐变主按钮 */
+    .el-button:not(.el-button--primary) {
+      color: var(--el-text-color-regular);
+      border-color: var(--el-border-color);
+      background: var(--el-bg-color);
+
+      &:hover {
+        color: var(--brand-primary);
+        border-color: color-mix(in srgb, var(--brand-primary) 40%, transparent);
+        background: var(--el-color-primary-light-9);
+      }
+    }
+  }
+}
+
+/* 确认弹窗正文：引导句 + 要点列表。弹窗挂在 body 下，类名只能写在全局样式里 */
+.app-confirm-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.app-confirm-lead {
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.app-confirm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  list-style: none;
+  background: var(--el-fill-color-lighter);
+
+  li {
+    position: relative;
+    padding-left: 14px;
+    line-height: 1.6;
+    color: var(--el-text-color-regular);
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: 0.68em;
+      left: 3px;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--brand-primary) 60%, transparent);
+    }
+  }
+}
+
+/* ===== 主题色渐变图标磁贴（设置行 / 下载中心等共用） =====
+ * 深色底白字款：颜色由 --tile-color 注入，尺寸/圆角/图标字号按需覆写 */
+.icon-tile {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 13px;
+  color: #fff;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--tile-color) 72%, #fff), var(--tile-color));
+  box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--tile-color) 65%, transparent);
+}
+
+/* ===== 队伍徽章（直播/回放卡片、成员卡片、成员详情、公演卡片共用） =====
+ * 药丸骨架与 .album-tag 共用上面的底座，底色配方自持；
+ * 队伍主题色由 --tb-color 注入，缺省时中性灰 */
+.team-badge {
+  --tb-color: #909399;
+
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  background: linear-gradient(135deg, var(--tb-color), color-mix(in srgb, var(--tb-color) 65%, #fff));
+  box-shadow: 0 3px 8px -3px color-mix(in srgb, var(--tb-color) 55%, transparent);
+}
+
+/* ===== 通用工具类 ===== */
+
+/* 单行省略号 */
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 隐藏滚动条（内容仍可滚动） */
+.no-scrollbar {
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ===== 均衡器跳动：当前播放指示（Albums 曲目行 / FloatAudioBar 共用） ===== */
+.eq {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+
+  i {
+    width: 3px;
+    border-radius: 1px;
+    background: var(--brand-primary);
+    animation: eq-bounce 0.9s ease-in-out infinite;
+
+    &:nth-child(2) {
+      animation-delay: 0.2s;
+    }
+
+    &:nth-child(3) {
+      animation-delay: 0.4s;
+    }
+  }
+
+  &.paused i {
+    animation-play-state: paused;
+  }
+}
+
+@keyframes eq-bounce {
+  0%,
+  100% {
+    height: 4px;
+  }
+
+  50% {
+    height: 12px;
+  }
+}
+
+/* ===== 独立播放窗浮层尺寸轴 =====
+ * 播放窗是独立 BrowserWindow，本窗 100vw 就是窗口内容宽，浮层尺寸直接按它插值：
+ * 320 → 900 线性推进（竖屏 9:16 常见 320–430、横屏 16:9 常见 640–900），
+ * 两端之外由 clamp 收住。
+ * 下端是**竖屏小窗**的档位（320–430 宽，1280 / 1440 屏开出来就是这一段）：
+ * 桌面播放窗里最窄的可用窗口，元素按「占窗口宽度的比例」定，32px 的钮在 320 宽里
+ * 已占近 1/10，所以这里比早期固定值整体收紧约 12%。
+ * 这里只立跨文件共用的量；单点使用的间距就地写 fp()，不另立 token。
+ * fp() 的两端是「320 宽 / 900 宽」，900 以上继续长到 _fluid.scss 的 $growth 倍才封顶
+ * （标题栏那三条传 $grow = 1，因为栏高被主进程钉死）。
+ * 挂在 .fw-root（FloatWindowApp）而非 :root：主窗口没有播放浮层，取不到也不会串味 */
+.fw-root {
+  --fp-step: calc((100vw - 320px) / 580);
+  /* 圆钮直径：右上角动作钮 / 旋转组与底部控制条胶囊各一档 */
+  --fp-btn: #{fp(28px, 40px)};
+  --fp-capsule-btn: #{fp(25px, 34px)};
+  /* 胶囊上下内距：胶囊总高 = 钮径 + 2 * 本值（弹幕避让量也按这条式子算） */
+  --fp-capsule-pad: #{fp(2.5px, 5px)};
+  /* 圆钮内图标边长：MediaIcon 不传 size 即 1em，随按钮 font-size 走 */
+  --fp-icon: #{fp(14px, 20px)};
+  /* 浮层文字：主 / 次 */
+  --fp-font: #{fp(11px, 13.5px)};
+  --fp-font-sm: #{fp(10px, 12.5px)};
+  /* 浮层内元素间距 */
+  --fp-gap: #{fp(3px, 7px)};
+  /* 底部控制条离窗口底边的悬空量：弹幕避让量把它算在内，改这里一处即可 */
+  --fp-control-gap: #{fp(8px, 12px)};
+  /* 浮层距窗口边缘的内缩量：互动榜、右上角动作钮、弹幕层共用同一处口径，
+     弹幕层的位置由脚本拼进 calc（use-danmaku-layer 的 DANMAKU_INSET） */
+  --fp-inset: #{fp(7px, 12px)};
+}
+
+/* ===== 播放器共用（LivePlayer / PlaybackPlayer） ===== */
+
+/* 原生 video：铺满容器、等比留边 */
+.video-player {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* 旋转载体：视频居中包裹层，旋转/缩放 transform 由组件内联样式注入；
+ * 旋转只作用于这层，弹幕、迷你条等兄弟浮层不参与旋转 */
+.video-wrapper {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transition: transform 0.3s ease;
+  transform-origin: center center;
+}
+
+/* 悬浮操作容器：横排置于画面右上角（直播 / 回放共用），贴边量随浮层曲线收放 */
+.player-actions {
+  position: absolute;
+  top: var(--fp-inset);
+  right: var(--fp-inset);
+  display: flex;
+  align-items: center;
+  gap: var(--fp-gap);
+  z-index: 30;
+}
+
+/* hover 白纱叠加层注册为可动画颜色，保证渐入渐出手感 */
+@property --ab-tint {
+  syntax: '<color>';
+  inherits: false;
+  initial-value: transparent;
+}
+
+/* ===== 播放器深色玻璃胶囊容器（RotationControls / MiniControls 共用） =====
+ * 消费 :root 的 --player-glass-* token，与 .action-btn 同一设计语言；
+ * 无 backdrop-filter，原因见 token 组注释 */
+.player-capsule {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-pill);
+  background: var(--player-glass-bg);
+  box-shadow: inset 0 0 0 1px var(--player-glass-ring);
+}
+
+/* 胶囊内透明圆钮：hover 白纱、按下缩放。尺寸写在这里而非各播放器的 scoped 样式 ——
+ * 插槽内容属于调用方作用域，拿不到 MiniControls 内部的 scoped 规则，各自复写一份迟早走样 */
+.player-capsule__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--fp-capsule-btn);
+  height: var(--fp-capsule-btn);
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  font-family: inherit;
+  /* 图标是 1em：这里定字号即定图标边长，按钮放大时图标同比跟上 */
+  font-size: var(--fp-icon);
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease,
+    transform 0.1s ease;
+
+  &:hover {
+    background: var(--player-glass-hover);
+  }
+
+  &:active {
+    transform: scale(0.92);
+  }
+}
+
+/* ===== 弹幕层（直播 / 回放共用） =====
+ * left / width 由组件脚本注入（锚视频实际渲染区，左右不越黑边）；bottom 恒为控制条避让量、
+ * top 见下方，纵向一律贴窗口——画面上下有黑边时气泡照旧铺到黑边上。
+ * top + bottom 双约束把盒子拉伸为确定高度，面板的 max-height:100% 才有参照。
+ * 此处 width 仅为元数据未就绪（脚本拿不到渲染区）时的兜底：百分比落在 shrink-to-fit
+ * 的绝对定位父上会解析成 auto，必须定死，面板宽度才不会随内容抖动 */
+.danmaku-list {
+  position: absolute;
+  /* 贴窗口顶：不跟画面渲染区顶边的黑边下沉；与互动榜锚点留同一内缩量，差几像素两者就错行 */
+  top: var(--fp-inset);
+  z-index: 10;
+  /* 盒子被拉伸到整个可用高度，必须显式声明，否则挡住视频的双击全屏 */
+  pointer-events: none;
+  /* 宽度上限用 em，跟随字号缩放 */
+  width: min(90%, 37em);
+  margin-bottom: 6px;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-start;
+}
+
+/* 作者名：8em 上限——写 100% 无约束力（气泡宽由内容撑出），长 ID 会把正文挤成多行 */
+.danmaku-author {
+  flex-shrink: 0;
+  max-width: 8em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--brand-secondary);
+  font-weight: 600;
+}
+
+/* 正文可压缩可换行：名字拿不下的宽度由正文让出，长弹幕靠换行而非截断姓名收场 */
+.danmaku-text {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+/* 悬浮圆形操作按钮（录制 / 下载）：与 RotationControls 胶囊同一套视觉语言。
+ * 底色两层：背景色是固定深色底、背景图是白纱叠加层（同 .rotate-btn）——
+ * 直接换底色会让半透明白压到视频画面上泛白。
+ * is-active = 任务进行中：--ab-active-bg 实底色、--ab-pulse 呼吸光圈 */
+.action-btn {
+  --ab-active-bg: rgba(255, 255, 255, 0.18);
+  --ab-pulse: rgba(255, 255, 255, 0.45);
+  --ab-tint: transparent;
+
+  width: var(--fp-btn);
+  height: var(--fp-btn);
+  padding: 0;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  /* 图标是 1em：定字号即定图标边长 */
+  font-size: var(--fp-icon);
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background-color: var(--player-glass-bg);
+  background-image: linear-gradient(var(--ab-tint), var(--ab-tint));
+  box-shadow: inset 0 0 0 1px var(--player-glass-ring);
+  cursor: pointer;
+  transition:
+    --ab-tint 0.2s ease,
+    color 0.2s ease,
+    transform 0.1s ease;
+
+  /* 与 .rotate-btn:hover 同值：12% 白叠加在同一个深色底上 */
+  &:hover {
+    --ab-tint: var(--player-glass-hover);
+  }
+
+  &:active {
+    transform: scale(0.92);
+  }
+
+  /* 任务进行中：常亮实色底 + 呼吸光圈，切回播放器也能一眼看出状态。
+     只换 background-color，白纱层保留；图标随光圈同周期闪烁 */
+  &.is-active {
+    color: #fff;
+    background-color: var(--ab-active-bg);
+    animation: action-pulse 1.4s ease-in-out infinite;
+
+    /* 图标呼吸闪烁：与 action-pulse 同为 1.4s ease-in-out，同步启停 */
+    .media-icon {
+      animation: icon-blink 1.4s ease-in-out infinite;
+    }
+  }
+}
+
+@keyframes action-pulse {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+      0 0 0 0 var(--ab-pulse);
+  }
+
+  50% {
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+      0 0 0 7px transparent;
+  }
+}
+
+/* 进行中图标的同步闪烁：50% 处最淡，与光圈扩散到最大的时刻一致 */
+@keyframes icon-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.action-btn--record {
+  --ab-active-bg: #ff5c7a;
+  --ab-pulse: rgba(255, 92, 122, 0.55);
+
+  color: #ff8fa3;
+
+  &:hover {
+    color: #ff5c7a;
+  }
+}
+
+.action-btn--download {
+  --ab-active-bg: #34c07c;
+  --ab-pulse: rgba(52, 192, 124, 0.45);
+
+  color: #7dd8a4;
+
+  &:hover {
+    color: #34c07c;
+  }
+}
+
+/* 旋转提示：短暂居中浮现，1.4s 后自行消失 */
+.rotate-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 7px 16px;
+  border-radius: var(--radius-pill);
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+  z-index: 25;
+  pointer-events: none;
+  animation: fade-in 0.18s ease;
+}
+
+/* 全局 360° 旋转：黑胶盘标（Albums / FloatAudioBar）与加载环（PlayerLoading）共用 */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 原生 title 替身：浏览器 tooltip 在 Electron 窗口里不弹，改用纯文本小浮层。
+ * 不带箭头与入场动画，颜色走 Element Plus 变量，亮暗主题一并跟随 */
+.native-title-tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 99999;
+  max-width: 320px;
+  padding: 4px 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 4px;
+  background: var(--el-bg-color);
+  box-shadow: var(--shadow-sm);
+  color: var(--el-text-color-primary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  visibility: hidden;
+
+  &.is-visible {
+    visibility: visible;
+  }
+}
+
+/* ===== 首页新版本 toast =====
+ * ElMessage 由 JS 挂到 body，样式必须放全局层；customClass 只命中这一条消息，
+ * 不影响项目里其他 ElMessage 提示。颜色走主题变量，亮暗主题一并跟随。 */
+.el-message.update-toast-message {
+  --el-message-bg-color: var(--el-bg-color);
+  --el-message-text-color: var(--el-text-color-primary);
+
+  min-width: 360px;
+  max-width: min(440px, calc(100vw - 40px));
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--brand-primary) 28%, var(--el-border-color-lighter));
+  border-left: 3px solid var(--brand-primary);
+  border-radius: 12px;
+  box-shadow:
+    var(--shadow-lg),
+    0 10px 26px -14px rgba(var(--brand-rgb), 0.5);
+  align-items: flex-start;
+
+  .el-message__icon.el-message-icon--info {
+    margin-top: 2px;
+    color: var(--brand-primary);
+    font-size: 18px;
+  }
+
+  .el-message__content {
+    flex: 1;
+    min-width: 0;
+    line-height: 1.5;
+  }
+
+  .el-message__closeBtn {
+    margin-top: 2px;
+  }
+}
+
+.update-toast {
+  &__title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+  }
+
+  &__desc {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+  }
+
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+  }
+}

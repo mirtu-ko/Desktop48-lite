@@ -1,0 +1,43 @@
+{
+  "name": "desktop48-lite",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Desktop48 lite —— Desktop48 桌面端的 Tauri 重构版",
+  "license": "MIT",
+  "scripts": {
+    "dev": "node scripts/tauri.mjs tauri dev",
+    "dev:web": "vite",
+    "build": "node scripts/tauri.mjs tauri build",
+    "build:app": "node scripts/tauri.mjs tauri build --bundles app",
+    "build:web": "vue-tsc --noEmit && vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "tauri": "tauri",
+    "probe": "node scripts/tauri.mjs cargo run --manifest-path src-tauri/Cargo.toml --example probe",
+    "check": "node scripts/check.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "@tauri-apps/api": "^2.12.5",
+    "@vueuse/core": "^15.0.0",
+    "dayjs": "^1.11.23",
+    "element-plus": "^2.14.8",
+    "hls.js": "^1.7.4",
+    "mitt": "^3.0.1",
+    "mpegts.js": "^1.8.2",
+    "sass-embedded": "^1.108.2",
+    "vue": "^3.5.46",
+    "vue-router": "^5.5.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.6",
+    "@vitejs/plugin-vue": "^6.0.11",
+    "jsdom": "^31.0.1",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1",
+    "vue-tsc": "^3.3.14"
+  }
+}

@@ -1,0 +1,131 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+# 结构照 tauri-apps/tauri-action README 的官方示例：
+# macos-latest 复用同一 runner、靠 --target 区分架构，其余平台 args 为空。
+#
+# 为什么 releaseDraft 必须是 false：tauri-action 是按「tag 相同 **且** draft 状态相同」
+# 去找已有 release 的，矩阵里每个 job 都会走一遍「找到就追加、找不到就新建」。
+# 早先这里用 draft: true，四平台串行要跑 40 分钟以上；中途在网页上把 draft 点成发布，
+# 后续 job 就匹配不上那条 release，于是又新建了一条同 tag 的 draft —— v0.1.0 当时
+# 就是两条同 tag release、资产被劈成两半（Windows 在 draft，macOS/Linux 在 pre-release）。
+# 直接发布（draft: false）后所有 job 匹配到的是同一条稳定 release，不会再分叉。
+# 代价：第一个 job 跑完就能在 Releases 页看到这条 release，但 Windows 等资产要到后面
+# 的 job 才补齐（约晚半小时），期间页面是不完整的 —— 比两条重复 release 好收拾。
+jobs:
+  publish-tauri:
+    name: publish (${{ matrix.label }})
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      # GitHub 免费额度的 macOS runner 并发是 1：矩阵里两个 macos-latest 并行时，
+      # 后排队那个会一直等不到 runner，15 分钟后被取消（arm64 就这样整包没出）。
+      # 串行跑，代价是多几分钟，换来两个架构都出包。
+      max-parallel: 1
+      matrix:
+        include:
+          - platform: 'macos-latest' # Apple Silicon（M1 及以上）
+            target: 'aarch64-apple-darwin'
+            label: 'macos-arm64'
+          - platform: 'macos-latest' # Intel
+            target: 'x86_64-apple-darwin'
+            label: 'macos-x64'
+          - platform: 'ubuntu-22.04'
+            target: ''
+            label: 'linux-x64'
+          - platform: 'windows-latest'
+            target: ''
+            label: 'windows-x64'
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装 Linux 系统依赖
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libdbus-1-dev pkg-config \
+            build-essential \
+            curl wget file \
+            libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf xdg-utils
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # 两个 Apple 目标只在 macOS runner 上用，其它平台留空以省掉安装时间
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.label }}
+
+      - run: npm ci
+
+      # macOS 签名：Tauri 用 `var_os("APPLE_CERTIFICATE")` 判断要不要签，
+      # **空字符串也算 Some**，所以只把证书项留空是不够的，必须整个 env 不出现。
+      # 于是拆成两步：配置了证书的走签名那步，否则走干净的那步。
+      #
+      # 要启用签名，在仓库 Secrets 里配好这几个（见 Tauri 文档 Sign/macOS）：
+      #   APPLE_CERTIFICATE（.p12 的 base64）、APPLE_CERTIFICATE_PASSWORD、
+      #   APPLE_SIGNING_IDENTITY，公证再加 APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID
+      - name: 检查 macOS 签名证书
+        id: cert
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.APPLE_CERTIFICATE }}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 构建并发布（已签名）
+        if: steps.cert.outputs.present == 'true'
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: Desktop48 lite ${{ github.ref_name }}
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
+
+      # 未配置证书时不加 --no-sign：那样只得到 linker-signed 的半成品签名
+      # （Sealed Resources=none），macOS 判定「已损坏」、右键也打不开。
+      # 改用 tauri.conf.json 的 macOS.signingIdentity: "-" 做 ad-hoc 签名，
+      # 产出正常封存资源的 adhoc 签名，用户右键「打开」即可。
+      - name: 构建并发布
+        if: steps.cert.outputs.present != 'true'
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: Desktop48 lite ${{ github.ref_name }}
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}

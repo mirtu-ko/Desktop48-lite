@@ -1,0 +1,78 @@
+import type { TaskPayload } from '@renderer/services/task-payload'
+import type { TaskKind } from '@renderer/stores/tasks'
+import useTasksStore from '@renderer/stores/tasks'
+import Tools from '@renderer/utils/tools'
+import { ElMessage } from 'element-plus'
+import { computed } from 'vue'
+import { trackEvent } from '../utils/umami'
+import { useDownloadGuard } from './use-download-guard'
+
+/**
+ * 播放器媒体任务发起流程：LivePlayer（录制）与 PlaybackPlayer（回放下载）
+ * 原本各自维护一套「目录校验 → 取源地址 → 组 TaskPayload → handleTask 下发」的同构代码，
+ * 这里收敛为单一骨架；差异项通过参数表达：
+ * - kind: 'download'（回放 HLS→MP4）/ 'record'（直播 RTMP→FLV）
+ * - ext / separator: 任务文件名的扩展名与成员名分隔符（保持既有命名约定）
+ * - getUrl: 源地址获取方式——回放用现成 playStreamPath，录制需先拉最新 RTMP 详情
+ *
+ * 状态查询与停止仍走 useTasksStore 的共享任务 store（handleTask/isTaskRunning/stopTaskByLiveId 一并返回）。
+ * 须在组件 setup 内调用（useDownloadGuard 内部依赖 useRouter）。
+ */
+export function useMediaDownload(options: {
+  kind: TaskKind
+  liveId: () => string
+  /** 成员/主播名：任务文件名前缀 */
+  getRealName: () => string
+  /** 任务开始时间：文件名时间戳来源 */
+  startTime: () => number
+  ext: () => string
+  separator?: () => string
+  /** 源地址解析：返回 null 表示失败（失败提示由调用链既有兜底负责，如 Apis 统一弹窗） */
+  getUrl: () => Promise<string | null>
+}) {
+  const { checkDownloadDirectory } = useDownloadGuard()
+  const { handleTask, isTaskRunning, stopTaskByLiveId } = useTasksStore()
+
+  const running = computed(() => isTaskRunning(options.kind, options.liveId()))
+
+  async function start() {
+    const valid = await checkDownloadDirectory()
+    if (!valid)
+      return
+
+    const url = await options.getUrl()
+    if (!url)
+      return
+
+    const filename = Tools.taskFilename(
+      options.getRealName(),
+      options.startTime(),
+      options.ext(),
+      options.separator?.() ?? '',
+    )
+    const task: TaskPayload = {
+      url,
+      filename,
+      liveId: options.liveId(),
+    }
+    // Umami 事件：下载 / 录制发起量（kind 区分 download / record，不带成员信息）
+    trackEvent('task:start', { kind: options.kind })
+    // 任务由全局 store 接管，状态在播放器按钮就地可见。
+    await handleTask(task, options.kind)
+  }
+
+  /** 按钮点击统一入口：未运行则发起，运行中则停止（含提示） */
+  function onActionClick() {
+    if (!running.value) {
+      void start()
+      return
+    }
+    trackEvent('task:stop', { kind: options.kind })
+    stopTaskByLiveId(options.kind, options.liveId())
+    ElMessage({ message: options.kind === 'record' ? '已结束录制' : '已停止下载', type: 'success' })
+  }
+
+  return { running, onActionClick }
+}
+
+export default useMediaDownload
