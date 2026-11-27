@@ -516,14 +516,31 @@ body {
   box-shadow: var(--shadow-sm);
   transition:
     transform 0.2s ease-in-out,
-    box-shadow 0.2s ease-in-out;
+    box-shadow 0.2s ease-in-out,
+    border-color 0.2s ease-in-out;
+
+  /* 默认态（不带 .clickable）：无法交互，视觉保持原样 */
+  &,
+  &.is-disabled {
+    cursor: default;
+  }
 
   &.clickable {
     cursor: pointer;
 
     &:hover {
       transform: translateY(-3px);
+      border-color: color-mix(in srgb, var(--brand-primary) 45%, var(--el-border-color-lighter));
       box-shadow: var(--shadow-md);
+    }
+
+    &:active {
+      transform: translateY(-1px);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--brand-primary);
+      outline-offset: 2px;
     }
   }
 }

@@ -4,17 +4,17 @@
  * 全部页面已接入（直播 / 回放 / 公演 / 专辑 / 成员 / 总选 / 房间 / 设置）。
  */
 import type { RouteRecordRaw } from 'vue-router'
-import { defineAsyncComponent } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'
 
-const Albums = defineAsyncComponent(() => import('@renderer/pages/Albums.vue'))
-const Elections = defineAsyncComponent(() => import('@renderer/pages/Elections.vue'))
-const Lives = defineAsyncComponent(() => import('@renderer/pages/Lives.vue'))
-const Members = defineAsyncComponent(() => import('@renderer/pages/Members.vue'))
-const Playbacks = defineAsyncComponent(() => import('@renderer/pages/Playbacks.vue'))
-const Rooms = defineAsyncComponent(() => import('@renderer/pages/Rooms.vue'))
-const Setting = defineAsyncComponent(() => import('@renderer/pages/Setting.vue'))
-const Shows = defineAsyncComponent(() => import('@renderer/pages/Shows.vue'))
+// vue-router 原生支持懒加载，无需再套 defineAsyncComponent；KeepAlive 缓存解析后的实例
+const Albums = () => import('@renderer/pages/Albums.vue')
+const Elections = () => import('@renderer/pages/Elections.vue')
+const Lives = () => import('@renderer/pages/Lives.vue')
+const Members = () => import('@renderer/pages/Members.vue')
+const Playbacks = () => import('@renderer/pages/Playbacks.vue')
+const Rooms = () => import('@renderer/pages/Rooms.vue')
+const Setting = () => import('@renderer/pages/Setting.vue')
+const Shows = () => import('@renderer/pages/Shows.vue')
 
 const routes: RouteRecordRaw[] = [
   { path: '/lives', component: Lives },

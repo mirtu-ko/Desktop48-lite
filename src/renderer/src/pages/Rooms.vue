@@ -19,6 +19,7 @@ import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import PreviewImage from '@renderer/components/ui/PreviewImage.vue'
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
+import { useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { useMemberTeamPromotionStore } from '@renderer/stores/member-team-promotion'
 import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/pocket-unread'
 import { useRoomPinsStore } from '@renderer/stores/room-pins'
@@ -72,6 +73,8 @@ const {
   unlockSmall,
   openTemporaryRoom,
   closeTemporaryRoom,
+  applyRoomFollowSource,
+  notePocketFollow,
 
   loadMoreHistory,
   openSharedLive,
@@ -112,6 +115,7 @@ function openDateDialog() {
 }
 
 const { findMemberByUserId } = useMemberDirectoryStore()
+const { followMember, unfollowMember } = useFollowedMembersStore()
 
 /** 房间展示队伍：整列一次派生，模板只读 displayTeam；服务端原值仍留在 room 上 */
 const { displayTeamOf } = useMemberTeamPromotionStore()
@@ -202,18 +206,31 @@ function isPocketFollowed(source: PocketRoom['followSource']): boolean {
   return source === 'pocket' || source === 'both'
 }
 
-/** 口袋关注 / 取关：只动账号侧关注，不改本地名单；结果就地更新当前房间来源 */
+/** 是否在本机名单里（local / both 都算） */
+function isLocallyFollowed(source: PocketRoom['followSource']): boolean {
+  return source === 'local' || source === 'both'
+}
+
+const selectedPocketFollowed = computed(() => isPocketFollowed(selectedRoom.value?.followSource))
+const selectedLocalFollowed = computed(() => isLocallyFollowed(selectedRoom.value?.followSource))
+
+/**
+ * 资料卡的两个关注开关：口袋关注写账号并并进本机名单，本地关注只写本机名单。
+ * 两个来源都不再关注时房间移出左列，来源变更统一走 composable 的单一入口。
+ */
 const pocketFollowBusy = ref(false)
+const localFollowBusy = ref(false)
 
 async function togglePocketFollow() {
   const room = selectedRoom.value
-  if (!room || pocketFollowBusy.value)
+  if (!room || pocketFollowBusy.value || localFollowBusy.value)
     return
-  const willFollow = !isPocketFollowed(room.followSource)
-  // 取关是账号级破坏性操作：二次确认，避免手滑把口袋侧关注摘掉
+  const willFollow = !selectedPocketFollowed.value
+  // 本地状态在 await 前截下：回包期间可能已切房
+  const keepLocal = selectedLocalFollowed.value
   if (!willFollow) {
     const ok = await ElMessageBox.confirm(
-      `确定在口袋账号取消关注「${room.nickname}」吗？`,
+      `确定在口袋账号取消关注「${room.nickname}」吗？该操作会同步到你的口袋账号。`,
       '取消口袋关注',
       {
         type: 'warning',
@@ -228,14 +245,25 @@ async function togglePocketFollow() {
   }
   pocketFollowBusy.value = true
   try {
-    if (willFollow)
+    if (willFollow) {
       await window.mainAPI.pocketFollowMember(room.userId)
-    else
-      await window.mainAPI.pocketUnfollowMember(room.userId)
-    room.followSource = willFollow
-      ? (room.followSource === 'local' ? 'both' : 'pocket')
-      : (room.followSource === 'both' ? 'local' : undefined)
-    ElMessage({ message: willFollow ? '已在口袋账号关注该成员' : '已在口袋账号取消关注该成员', type: 'success' })
+      // 先更新口袋镜像再写本地：本地 store 的变化会触发来源 watch
+      notePocketFollow(room.userId, true)
+      const localOk = await followMember({ userId: room.userId, realName: room.nickname, teamColor: room.teamColor })
+      applyRoomFollowSource(room.userId, localOk ? 'both' : 'pocket')
+      ElMessage({
+        message: localOk ? '已关注（口袋账号 + 本机）' : '已关注口袋账号，本机记录同步失败',
+        type: localOk ? 'success' : 'warning',
+      })
+      return
+    }
+    await window.mainAPI.pocketUnfollowMember(room.userId)
+    notePocketFollow(room.userId, false)
+    applyRoomFollowSource(room.userId, keepLocal ? 'local' : undefined)
+    ElMessage({
+      message: keepLocal ? '已取消口袋关注，本地关注保留' : '已取消关注，房间已移出列表',
+      type: 'success',
+    })
   }
   catch (error) {
     ElMessage.error(willFollow ? '口袋关注失败，请稍后重试' : '口袋取关失败，请稍后重试')
@@ -243,6 +271,37 @@ async function togglePocketFollow() {
   }
   finally {
     pocketFollowBusy.value = false
+  }
+}
+
+/** 本地关注只写本机名单；口袋已关注时锁定，避免删掉同步会补回来的记录 */
+async function toggleLocalFollow() {
+  const room = selectedRoom.value
+  if (!room || localFollowBusy.value || pocketFollowBusy.value || selectedPocketFollowed.value)
+    return
+  const willFollow = !selectedLocalFollowed.value
+  localFollowBusy.value = true
+  try {
+    if (willFollow) {
+      const ok = await followMember({ userId: room.userId, realName: room.nickname, teamColor: room.teamColor })
+      if (!ok) {
+        ElMessage.error('本地关注失败，请稍后重试')
+        return
+      }
+      applyRoomFollowSource(room.userId, 'local')
+      ElMessage({ message: '已在本机关注该成员', type: 'success' })
+      return
+    }
+    const ok = await unfollowMember(room.userId)
+    if (!ok) {
+      ElMessage.error('本地取关失败，请稍后重试')
+      return
+    }
+    applyRoomFollowSource(room.userId, undefined)
+    ElMessage({ message: '已移出本机，房间不再显示', type: 'success' })
+  }
+  finally {
+    localFollowBusy.value = false
   }
 }
 
@@ -1537,16 +1596,20 @@ function liveCardHint(message: PocketRoomMessageView): string {
   return playback ? '在独立播放窗观看回放' : '在独立播放窗进入直播'
 }
 
-/** 右栏消息区状态文案 */
-const statusText = ref('')
-watch([chatStatus, chatStatusText], () => {
+/** 加载中文案：底部状态行与中部空态共用一份 */
+const LOADING_TEXT = '正在加载房间消息…'
+
+/**
+ * 右栏状态文案：列表里还有旧消息时由底部小字提示加载/失败，不打断阅读；
+ * 列表为空时状态交给中部空态卡片，底部不再重复（见 .main-foot 的 v-if）。
+ */
+const statusText = computed(() => {
   if (chatStatus.value === 'loading')
-    statusText.value = '正在加载房间消息…'
-  else if (chatStatus.value === 'error')
-    statusText.value = chatStatusText.value || '房间消息加载失败'
-  else
-    statusText.value = ''
-}, { immediate: true })
+    return LOADING_TEXT
+  if (chatStatus.value === 'error')
+    return chatStatusText.value || '房间消息加载失败'
+  return ''
+})
 
 onMounted(() => {
   debugLog('rooms-page', 'Rooms 页面挂载，开始获取频道列表', { loggedIn: loggedIn.value })
@@ -1684,6 +1747,12 @@ onMounted(() => {
                   >
                     <MediaIcon class="room-pin-ico" name="pushpinFilled" :size="13" />
                   </el-tooltip>
+                  <!-- 仅靠本机关注留着的房间：账号关注会并进本机名单（both），不会挂这个标记 -->
+                  <span
+                    v-if="room.followSource === 'local'"
+                    class="room-local-tag"
+                    title="本地关注（仅本机，直播 / 回放优先展示）"
+                  >本地</span>
                   <!-- 临时房间：本次会话临时打开的，不属于关注房间 -->
                   <span v-if="room.temporary" class="room-temp-tag">临时</span>
                   <span v-if="isRoomClosedOf(room.userId)" class="room-closed-tag">已关闭</span>
@@ -1910,7 +1979,7 @@ onMounted(() => {
                   </div>
                   <div
                     class="msg-row"
-                    :class="[`msg-row--${message.kind}`, { 'msg-row--member': message.isMember, 'msg-row--member-reply': message.isMember && message.quote && message.kind !== 'flip', 'is-arriving': arrivingIds.has(message.id) }]"
+                    :class="[`msg-row--${message.kind}`, { 'msg-row--member': message.isMember, 'msg-row--member-visitor': message.isMember && !isRoomOwner(message), 'msg-row--member-reply': message.isMember && message.quote && message.kind !== 'flip', 'is-arriving': arrivingIds.has(message.id) }]"
                     @contextmenu.prevent="openMessageMenu($event, message)"
                   >
                     <template v-if="message.kind === 'system'">
@@ -2180,7 +2249,7 @@ onMounted(() => {
                   <ChatDotRound />
                 </el-icon>
                 <template v-if="chatStatus === 'loading'">
-                  <p>正在加载房间消息…</p>
+                  <p>{{ LOADING_TEXT }}</p>
                 </template>
                 <template v-else-if="roomClosed">
                   <p>该房间已关闭</p>
@@ -2263,7 +2332,8 @@ onMounted(() => {
                 </div>
               </div>
 
-              <footer v-if="statusText" class="main-foot">
+              <!-- 列表里有内容时状态贴底提示；列表为空时中部空态已承担展示，避免同一句出现两次 -->
+              <footer v-if="statusText && messages.length" class="main-foot">
                 {{ statusText }}
               </footer>
 
@@ -2311,9 +2381,13 @@ onMounted(() => {
                 :team-name="selectedRoom.teamName"
                 :team-color="selectedRoom.teamColor"
                 :live="selectedRoom.live"
-                :pocket-followed="isPocketFollowed(selectedRoom.followSource)"
+                :pocket-followed="selectedPocketFollowed"
+                :local-followed="selectedLocalFollowed"
                 :pocket-follow-busy="pocketFollowBusy"
-                @toggle-follow="togglePocketFollow"
+                :local-follow-busy="localFollowBusy"
+                :pocket-unavailable="!!pocketFollowError"
+                @toggle-pocket-follow="togglePocketFollow"
+                @toggle-local-follow="toggleLocalFollow"
               />
               <RoomAlbum :messages="messages" />
             </aside>
@@ -2412,7 +2486,7 @@ onMounted(() => {
     background-color 0.15s ease;
 }
 
-/* 软标签：队伍徽标 / 临时 / 已关闭三个状态标记共用，色相由 --tag-color 给出 */
+/* 软标签：队伍徽标 / 本地 / 临时 / 已关闭四个状态标记共用，色相由 --tag-color 给出 */
 %soft-tag {
   flex: none;
   padding: 0 6px;
@@ -2979,6 +3053,13 @@ onMounted(() => {
 
   /* 队伍色只做淡底不加描边：它是身份标识，不像下面两个是状态提示 */
   box-shadow: none;
+}
+
+/* 「本地」关注标记：只在仅本地关注的房间出现，用中性色与「临时 / 已关闭」同规格 */
+.room-local-tag {
+  @extend %soft-tag;
+
+  --tag-color: var(--el-text-color-secondary);
 }
 
 /* 「临时」标记（左列条目与右栏头部共用）：换房间主题青 + 描边，
@@ -3592,7 +3673,8 @@ onMounted(() => {
 
   line-height: 15px;
   color: #fff;
-  background: var(--color-rooms);
+  /* 随行取色：房主房间青、串门成员成员蓝（见 .msg-row--member-visitor） */
+  background: var(--msg-accent, var(--color-rooms));
 }
 
 .msg-time {
@@ -3678,17 +3760,25 @@ onMounted(() => {
  * 规则放在礼物之后——成员发的礼物/翻牌同样按成员卡呈现（不再染金），
  * 系统通知走居中 pill，不经过这套样式 */
 .msg-row--member {
+  /* 成员身份色：房主走房间青，串门成员在下面覆写为成员蓝 */
+  --msg-accent: var(--color-rooms);
+
   .msg-nick {
-    color: var(--color-rooms);
+    color: var(--msg-accent);
   }
 
   /* 成员（xox）普通文字消息：相比普通用户气泡再微提一层，正文用主色、底色与描边更实。
    * 回复/引用类消息看 .msg-row--member-reply，不套这份强化 */
   .msg-bubble:not(.msg-bubble--media) {
     color: var(--el-text-color-primary);
-    background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 40%, transparent);
+    background: color-mix(in srgb, var(--msg-accent) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--msg-accent) 40%, transparent);
   }
+}
+
+/* 串门成员：身份色换成成员蓝，房间青留给房主本人 */
+.msg-row--member-visitor {
+  --msg-accent: var(--color-members);
 }
 
 /* 成员回复/引用类消息：顺着别人话题回的次要消息，比成员原创、也比普通用户发言弱一档

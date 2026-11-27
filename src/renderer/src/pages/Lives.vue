@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { LiveListItem, LiveListItemView, OpenLive } from '@renderer/services/api-types'
+import type { LiveListItem, LiveListItemView } from '@renderer/services/api-types'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import LiveItem from '@renderer/components/ui/LiveItem.vue'
 import LiveTabBar from '@renderer/components/ui/LiveTabBar.vue'
@@ -9,14 +9,14 @@ import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.
 import { useLiveIdle } from '@renderer/composables/use-live-idle'
 import { useMemberDetail } from '@renderer/composables/use-member-detail'
 import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/use-paged-live-list'
+import { isShowLive, showLockedHint, useShowActions } from '@renderer/composables/use-show-actions'
 import Apis from '@renderer/services/apis'
 import EventBus from '@renderer/services/event-bus'
 import useFloatPlayersStore from '@renderer/stores/float-players'
 import { useLiveStatusStore } from '@renderer/stores/live-status'
 import { useFollowedMembersStore } from '@renderer/stores/member-flags'
-import { resolveBilibiliRoomIdAsync } from '@renderer/utils/bilibili-room'
 import { debugLog } from '@renderer/utils/debug'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 const route = useRoute()
@@ -25,10 +25,13 @@ const router = useRouter()
 // 独立播放窗：直播/回放/公演共用全局播放挂载点
 const { openLive, openPlayback } = useFloatPlayersStore()
 
+// 空态公演预告的点击选路：与公演页同一份实现（进行中开直播 / 其余提示原因），见 use-show-actions
+const { onShowClick } = useShowActions()
+
 // 关注名单：模块级共享状态（与成员页共用同一份），直播列表页据此优先展示并加标识。
 // 页面被 keep-alive 缓存（只挂载一次），跨页同步靠这份共享状态而不是重新挂载
 const { followedMembers, refreshFollowedMembers, isFollowed } = useFollowedMembersStore()
-const { refreshLiveStatus } = useLiveStatusStore()
+const { refreshLiveStatus, removeLive } = useLiveStatusStore()
 
 // 成员详情卡片：点卡片上的成员名打开，详情按 userId 反查（数据源见 stores/member-directory）
 const {
@@ -49,6 +52,7 @@ const {
   list: liveList,
   loading,
   noMore,
+  loadFailed,
   onInfiniteScroll,
   getList: getLiveList,
   refreshFromTop,
@@ -60,16 +64,45 @@ const {
   stopOnError: false,
 })
 
-// 首屏/刷新后列表为空时展示骨架屏；已有列表时刷新只反馈到刷新按钮，避免整页蒙层闪烁
-const showSkeleton = computed(() => loading.value && liveList.value.length === 0)
 /** 手动刷新递增，让同一封面的失败图也强制重新请求 */
 const imageVersion = ref(0)
-/** 列表是否已至少完成一次加载：空态判定的前提（见下方 useLiveIdle 的 isEmpty） */
+/** 列表是否已至少完成一次加载：首屏骨架与空态 / 错误态的分界 */
 const listSettled = ref(false)
+/**
+ * 最近一次「落定」的加载是否失败。
+ * 只在 loading 回落时更新：重试期间维持原来的错误 / 空态界面（刷新按钮转圈反馈），
+ * 而不是在 错误页 ↔ 骨架屏 ↔ 空态 之间来回闪
+ */
+const lastLoadFailed = ref(false)
+
+// loading 只会被最新一次请求收回（见 use-paged-list），过期请求不会误触这里。
+// flush: 'sync'：即便请求在同一 tick 内 true → false，也不会被调度合并成「没变化」而漏记
+watch(loading, (isLoading) => {
+  if (isLoading)
+    return
+  listSettled.value = true
+  lastLoadFailed.value = loadFailed.value
+}, { flush: 'sync' })
+
+/**
+ * 页面展示态的唯一真值来源（模板分支与空态轮询共用，避免多处各写一遍判定）：
+ * - list：有直播。刷新走软刷新，期间旧卡片保留，不会掉回下面三种状态
+ * - skeleton：首屏尚未落定
+ * - error：列表为空且最近一次加载失败 —— 与「确实没人直播」区分开，不让断网伪装成空态
+ * - idle：列表为空且加载成功 —— 白天无人直播的等待位
+ */
+type LiveViewState = 'list' | 'skeleton' | 'error' | 'idle'
+const viewState = computed<LiveViewState>(() => {
+  if (liveList.value.length > 0)
+    return 'list'
+  if (!listSettled.value)
+    return 'skeleton'
+  return lastLoadFailed.value ? 'error' : 'idle'
+})
 
 /**
  * 空态（白天无人直播）的等待期内容：静默轮询自动感知开播 + 公演排期预告 + 最近回放。
- * 轮询只在「本页可见 + 列表为空」时运行，发现新直播即把展示权交回列表（refreshList）；
+ * 轮询只在「本页可见 + 空态」时运行，发现新直播即把展示权交回列表（refreshList）；
  * 可见性由 composable 自己挂 onMounted / onActivated / onDeactivated 维护，页面无需接线。
  */
 const {
@@ -82,9 +115,8 @@ const {
   lastCheckText,
   waitedText,
 } = useLiveIdle({
-  // listSettled 是前提：挂载瞬间「列表还没开始加载」与「确实没有直播」长得一模一样，
-  // 少了它会在每次进页面时白拉一次公演（有直播时这次请求纯属浪费）
-  isEmpty: () => listSettled.value && !loading.value && liveList.value.length === 0,
+  // 首屏未落定 / 加载失败都不算空态：前者会在每次进页面时白拉一次公演，后者应由用户重试
+  isEmpty: () => viewState.value === 'idle',
   onLiveFound: () => refreshList(false),
 })
 
@@ -118,33 +150,6 @@ function play(item: LiveListItem) {
 }
 
 /**
- * 空态里的公演预告：只有「进行中」（status === 2）可点开直播，
- * 选路与弹幕房间映射与公演页（Shows.vue 的 openLiveStream）保持一致。
- */
-async function openShowStream(show: OpenLive) {
-  if (show.status !== 2) {
-    debugLog('show', `公演选路: ${show.liveId} 状态=${show.status}（非进行中），忽略本次点击`)
-    return
-  }
-  openLive({
-    liveId: show.liveId,
-    nickname: show.teamList?.[0]?.teamName || '',
-    title: show.subTitle || show.title,
-    startTime: Number.parseInt(show.stime),
-    source: 'open',
-    // 公演没有主播头像，用封面作窗口头像（与公演页一致）
-    avatar: show.coverPath,
-    liveType: 1,
-    liveMode: 0,
-    // 弹幕房间三级解析（与公演页同口径）
-    bilibiliRoomId: await resolveBilibiliRoomIdAsync({
-      groupId: show.teamList?.[0]?.groupId,
-      texts: [show.title, show.subTitle],
-    }),
-  })
-}
-
-/**
  * 空态里的回放卡片：以独立播放窗打开（与回放页 onPlaybackClick 同口径，
  * 标题缺失时用主播名兜底 —— 播放窗标题栏需要非空）。
  */
@@ -169,28 +174,33 @@ function onLivesRefresh() {
     refreshList()
 }
 
-// 浮窗放流失败（流已不存在/直播下架）时，若该直播属于本页列表则自动刷新
+/**
+ * 浮窗放流失败（流已不存在/直播下架）：只把这一条从本页列表摘掉，不整页重拉。
+ * 整页重拉会多打一轮全站直播状态 + 第一页请求、回到顶部并重建全部卡片；
+ * 摘空后 viewState 自然进入 idle，由空态轮询接管后续开播检测。
+ * 必须同步摘掉共享状态里的同一场：空态轮询读的是 liveItems 缓存（120s 新鲜期），
+ * 不清掉会立刻判定「发现新直播」并把列表刷新回来，形成 摘除 → 空态 → 重刷 的循环。
+ */
 function onLiveUnavailable(liveId: string) {
-  const inList = liveList.value.some(item => item.liveId === liveId)
-  debugLog('list', `③收到下架广播: ${liveId}（来自播放器链的 live-unavailable 事件）在本页列表中: ${inList}${inList ? ' → 重置并刷新列表' : ' → 忽略'}`)
-  if (inList)
-    refreshList()
+  const index = liveList.value.findIndex(item => item.liveId === liveId)
+  debugLog('list', `③收到下架广播: ${liveId}（来自播放器链的 live-unavailable 事件）在本页列表中: ${index !== -1}${index !== -1 ? ' → 从列表移除' : ' → 忽略'}`)
+  if (index !== -1)
+    liveList.value.splice(index, 1)
+  removeLive(liveId)
 }
 
-// 手动/自动刷新：重置分页后拉取最新列表，并回到列表顶部。
+// 手动/自动刷新：回到列表顶部并软刷新（旧卡片保留到新数据落地，失败则原样保留）。
 // forceLiveStatus=false 用于空态检测已更新共享状态后的自动回列表，避免紧接着重复 getLiveList。
 function refreshList(forceLiveStatus = true) {
   imageVersion.value += 1
   if (forceLiveStatus)
     void refreshLiveStatus(true).catch(error => debugLog('list', '手动刷新共享直播状态失败', error))
-  refreshFromTop()
+  void refreshFromTop({ keepList: true })
 }
 
 onMounted(() => {
-  // getLiveList 内部收敛了所有异常（失败也 resolve），这里只用来标记「列表已加载过一轮」
-  void getLiveList().then(() => {
-    listSettled.value = true
-  })
+  // getLiveList 内部收敛了所有异常（失败也 resolve）；首屏落定由上方 watch(loading) 标记
+  void getLiveList()
   refreshFollowedMembers()
   EventBus.on('live-unavailable', onLiveUnavailable)
   // 双击底部 Dock 的直播项（根组件广播）：回顶由根组件做，这里只负责刷新当前可见的列表
@@ -211,7 +221,7 @@ onUnmounted(() => {
 
     <div class="live-main">
       <!-- 空态灵动岛：脱离滚动流，固定在页面顶部 -->
-      <div v-if="liveList.length === 0 && !loading" class="idle-head frosted-surface" role="status">
+      <div v-if="viewState === 'idle'" class="idle-head frosted-surface" role="status">
         <span class="idle-dot" aria-hidden="true" />
         <div class="idle-head-main">
           <p class="idle-title">
@@ -228,7 +238,7 @@ onUnmounted(() => {
       </div>
       <!-- 首屏骨架：比全屏 loading 蒙层更稳定，能预先表达卡片布局和即将出现的内容 -->
       <el-scrollbar
-        v-if="showSkeleton"
+        v-if="viewState === 'skeleton'"
         class="scrollbar-wrapper"
       >
         <CardSkeletonGrid
@@ -236,9 +246,27 @@ onUnmounted(() => {
         />
       </el-scrollbar>
 
+      <!-- 错误态：列表为空且加载失败。单独成页，不让断网伪装成「当前没有直播」 -->
+      <el-scrollbar
+        v-else-if="viewState === 'error'"
+        class="scrollbar-wrapper"
+      >
+        <div class="live-error" role="alert">
+          <p class="live-error-title">
+            直播列表加载失败
+          </p>
+          <p class="live-error-sub">
+            请检查网络连接后重试
+          </p>
+          <el-button type="primary" round :loading="loading" @click="refreshList()">
+            重新加载
+          </el-button>
+        </div>
+      </el-scrollbar>
+
       <!-- 空态：白天无人直播时的等待位 —— 自动轮询 + 公演排期预告，而不是一句干等 -->
       <el-scrollbar
-        v-else-if="liveList.length === 0 && !loading"
+        v-else-if="viewState === 'idle'"
         class="scrollbar-wrapper"
       >
         <div class="live-idle">
@@ -255,15 +283,22 @@ onUnmounted(() => {
               </button>
             </h2>
             <div class="idle-shows">
-              <div
+              <el-tooltip
                 v-for="show in previewShows"
                 :key="show.liveId"
-                class="idle-show lift-card"
-                :class="{ clickable: show.status === 2 }"
-                @click="openShowStream(show)"
+                :content="showLockedHint(show)"
+                :disabled="isShowLive(show)"
+                placement="top"
+                :show-after="300"
               >
-                <ShowCard :show="show" />
-              </div>
+                <div
+                  class="idle-show lift-card"
+                  :class="isShowLive(show) ? 'clickable' : 'is-disabled'"
+                  @click="onShowClick(show)"
+                >
+                  <ShowCard :show="show" :hint="showLockedHint(show)" />
+                </div>
+              </el-tooltip>
             </div>
           </template>
           <p v-else class="idle-hint">
@@ -533,6 +568,29 @@ onUnmounted(() => {
 
 .idle-playback {
   min-width: 0;
+}
+
+/* 错误态：与空态同一套留白节奏，居中给出原因 + 重试入口 */
+.live-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: calc(var(--page-pad) * 4) var(--page-pad);
+  text-align: center;
+
+  .live-error-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+  }
+
+  .live-error-sub {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+  }
 }
 
 .idle-hint {
